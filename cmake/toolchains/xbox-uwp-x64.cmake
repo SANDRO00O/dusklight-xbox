@@ -4,11 +4,11 @@
 # so this does not work with the Ninja presets used by the other platforms.
 #
 # Usage:
-#   cmake -S . -B build/xbox-uwp-x64 -G "Visual Studio 17 2022" -A x64 ^
-#         -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/xbox-uwp-x64.cmake
+#   cmake -S . -B build/xbox-uwp-x64 -A x64 "-DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/xbox-uwp-x64.cmake"
 #   cmake --build build/xbox-uwp-x64 --config RelWithDebInfo --target dusklight
+# (no -G: CMake picks the newest installed Visual Studio; quote the -D argument in PowerShell)
 #
-# STATUS: scaffolding only, untested. See docs/xbox-port.md for the known blockers.
+# STATUS: scaffolding only. See docs/xbox-port.md for the known blockers.
 
 set(CMAKE_SYSTEM_NAME WindowsStore)
 set(CMAKE_SYSTEM_VERSION 10.0)
@@ -38,3 +38,10 @@ set(AURORA_DAWN_PROVIDER vendor CACHE STRING "" FORCE)
 set(AURORA_DAWN_LINKAGE static CACHE STRING "" FORCE)
 set(AURORA_NOD_PROVIDER vendor CACHE STRING "" FORCE)
 set(AURORA_NOD_LINKAGE static CACHE STRING "" FORCE)
+
+# CMake treats WindowsStore as cross-compiling. Dawn's protobuf.cmake then requires a host protoc
+# ("When cross-compiling, you must specify a host protoc"). Protobuf is only used for Tint's IR
+# binary format and fuzzers, and TINT_BUILD_IR_BINARY defaults to DAWN_BUILD_PROTOBUF, so turn both
+# off explicitly.
+set(DAWN_BUILD_PROTOBUF OFF CACHE BOOL "" FORCE)
+set(TINT_BUILD_IR_BINARY OFF CACHE BOOL "" FORCE)
