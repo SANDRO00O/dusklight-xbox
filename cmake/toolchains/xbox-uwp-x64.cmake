@@ -45,3 +45,12 @@ set(AURORA_NOD_LINKAGE static CACHE STRING "" FORCE)
 # off explicitly.
 set(DAWN_BUILD_PROTOBUF OFF CACHE BOOL "" FORCE)
 set(TINT_BUILD_IR_BINARY OFF CACHE BOOL "" FORCE)
+
+# UWP projects enable /sdl by default. /sdl promotes C4146, C4703 and C4996 to errors, which breaks
+# third-party code (Dawn Device.cpp / BufferD3D11.cpp, libpng pngread.c / pngwrite.c). Turn it off.
+set(CMAKE_C_FLAGS_INIT "/sdl-")
+set(CMAKE_CXX_FLAGS_INIT "/sdl-")
+
+# sqlite3 (Aurora's shader/pipeline cache) uses CreateFileA/W, GetFileSize, HeapValidate etc., which
+# are not in the UWP app API partition. SQLITE_OS_WINRT selects its WinRT file layer instead.
+set(CMAKE_C_FLAGS_INIT "${CMAKE_C_FLAGS_INIT} /DSQLITE_OS_WINRT=1")
