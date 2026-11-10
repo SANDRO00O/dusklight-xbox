@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  AppX manifest template for the Xbox (UWP, Dev Mode) build.
+  Placeholders in @...@ are filled by CMake configure_file once the Xbox target is wired up.
+  Application EntryPoint is a placeholder until the UWP entry point exists (see docs/xbox-port.md).
+-->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:mp="http://schemas.microsoft.com/appx/2014/phone/manifest"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  IgnorableNamespaces="uap mp">
+
+  <Identity
+    Name="@DUSK_XBOX_PACKAGE_NAME@"
+    Publisher="@DUSK_XBOX_PUBLISHER@"
+    Version="@DUSK_XBOX_PACKAGE_VERSION@"
+    ProcessorArchitecture="x64" />
+
+  <mp:PhoneIdentity PhoneProductId="00000000-0000-0000-0000-000000000000" PhonePublisherId="00000000-0000-0000-0000-000000000000" />
+
+  <Properties>
+    <DisplayName>Dusklight</DisplayName>
+    <PublisherDisplayName>@DUSK_XBOX_PUBLISHER_DISPLAY_NAME@</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Universal" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+
+  <Applications>
+    <Application Id="App" Executable="dusklight.exe" EntryPoint="Dusklight.App">
+      <uap:VisualElements
+        DisplayName="Dusklight"
+        Description="Dusklight - Twilight Princess reimplementation"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png"
+        BackgroundColor="#101020">
+        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" />
+        <uap:SplashScreen Image="Assets\SplashScreen.png" />
+      </uap:VisualElements>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <!-- Read the disc image from a USB drive via the file picker. -->
+    <uap:Capability Name="removableStorage" />
+  </Capabilities>
+</Package>
