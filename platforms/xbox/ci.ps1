@@ -11,6 +11,14 @@ $buildDir = 'build/xbox-uwp-x64'
 $toolchain = 'cmake/toolchains/xbox-uwp-x64.cmake'
 $config = 'RelWithDebInfo'
 
+# UWP-capable SDL3 (community fork of libsdl-org/SDL 3.4.20 with the WinRT backend restored).
+# Upstream SDL3 stops with '#error Windows RT/UWP is no longer supported'. Pinned to a commit so CI
+# is reproducible; branch uwp-3.4.20 matches the SDL version pinned by Aurora.
+$sdlUwpRepo = 'https://github.com/XboxEmulationHub/SDL3-uwp.git'
+$sdlUwpBranch = 'uwp-3.4.20'
+$sdlUwpCommit = 'ec2e0e7c77ec9a04437eb3ae884d62ae0e6129b4'
+$sdlUwpDir = Join-Path (Get-Location) 'build/ext/SDL3-uwp'
+
 function Show-Failure([string]$Stage, [string]$LogFile, [int]$ExitCode) {
     Write-Host ''
     Write-Host "################ $Stage FAILED (exit code $ExitCode) ################"
@@ -31,6 +39,7 @@ Write-Host '::group::Tool versions'
 cmake --version
 rustc --version 2>&1
 cargo --version 2>&1
+git --version
 Write-Host '::endgroup::'
 
 # Short, always-visible summary of Visual Studio (full JSON goes to vswhere.log).
@@ -47,11 +56,30 @@ if (Test-Path $vswhere) {
     Write-Host 'vswhere.exe not found'
 }
 
+# --- Fetch the UWP SDL3 fork ---
+if (-not (Test-Path (Join-Path $sdlUwpDir 'CMakeLists.txt'))) {
+    Write-Host "Cloning $sdlUwpRepo ($sdlUwpBranch) into $sdlUwpDir"
+    New-Item -ItemType Directory -Force -Path (Split-Path $sdlUwpDir) | Out-Null
+    git clone --depth 1 --branch $sdlUwpBranch $sdlUwpRepo $sdlUwpDir 2>&1 | Tee-Object -FilePath sdl-clone.log | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Show-Failure 'SDL3-UWP CLONE' 'sdl-clone.log' $LASTEXITCODE
+        exit $LASTEXITCODE
+    }
+}
+$sdlHead = (git -C $sdlUwpDir rev-parse HEAD).Trim()
+Write-Host "SDL3-uwp HEAD: $sdlHead"
+if ($sdlHead -ne $sdlUwpCommit) {
+    # Branch moved since this script was written. Not fatal, but visible in the log.
+    Write-Host "::warning::SDL3-uwp branch $sdlUwpBranch is at $sdlHead, expected $sdlUwpCommit"
+}
+
 # --- Configure ---
 # No -G: CMake picks the newest installed Visual Studio generator (required for WindowsStore).
-# The -D argument is quoted so PowerShell does not split it at the dot in 'xbox-uwp-x64.cmake'.
-Write-Host "Configuring: cmake -S . -B $buildDir -A x64 -DCMAKE_TOOLCHAIN_FILE=$toolchain"
-cmake -S . -B $buildDir -A x64 "-DCMAKE_TOOLCHAIN_FILE=$toolchain" 2>&1 | Tee-Object -FilePath configure.log | Out-Null
+# The -D arguments are quoted so PowerShell does not split them at dots.
+# FETCHCONTENT_SOURCE_DIR_SDL makes Aurora's FetchContent_Declare(SDL ...) use the fork instead of
+# downloading upstream SDL (this also skips Aurora's Android-only patch commands).
+Write-Host "Configuring: cmake -S . -B $buildDir -A x64 -DCMAKE_TOOLCHAIN_FILE=$toolchain -DFETCHCONTENT_SOURCE_DIR_SDL=$sdlUwpDir"
+cmake -S . -B $buildDir -A x64 "-DCMAKE_TOOLCHAIN_FILE=$toolchain" "-DFETCHCONTENT_SOURCE_DIR_SDL=$sdlUwpDir" 2>&1 | Tee-Object -FilePath configure.log | Out-Null
 $configureExit = $LASTEXITCODE
 if ($configureExit -ne 0) {
     Show-Failure 'CONFIGURE' 'configure.log' $configureExit
