@@ -45,6 +45,14 @@ function Patch-File([string]$Rel, [string]$Pattern, [string]$Replacement, [int]$
 # at the top and the implementation block.
 Patch-File 'extern/aurora/lib/system_info.cpp' '(?m)^#if _WIN32(?=\r?$)' '#if _WIN32 && !defined(DUSK_XBOX_UWP)' 2
 
+# --- aurora: lib/card/DolphinCardPath.cpp ------------------------------------------------------
+# Finds an existing Dolphin memory card through the registry and SHGetKnownFolderPath (desktop-only).
+# The file's own `#if WINDOWS_STORE` branch tests a CMake variable that is never a preprocessor macro
+# (and its C++/CX body is broken), so the desktop code is compiled and fails. Importing Dolphin cards
+# has no use on a console, so take the generic SDL_GetPrefPath branch on UWP. Three `#if WIN32` lines:
+# includes, the ANSI helper, and the ResolveDolphinCardPath implementation.
+Patch-File 'extern/aurora/lib/card/DolphinCardPath.cpp' '(?m)^#if WIN32(?=\r?$)' '#if WIN32 && !defined(DUSK_XBOX_UWP)' 3
+
 # --- borealis: src/io.cpp ----------------------------------------------------------------------
 # CreateFileW is desktop-only; UWP provides CreateFile2. Shim it right after <Windows.h> so both
 # uses (RandomAccessFile::open and atomic_replace) keep their code unchanged.
