@@ -4,9 +4,9 @@
 # so this does not work with the Ninja presets used by the other platforms.
 #
 # Usage:
-#   cmake -S . -B build/xbox-uwp-x64 -A x64 "-DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/xbox-uwp-x64.cmake"
+#   cmake -S . -B build/xbox-uwp-x64 -A x64 "-DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/xbox-uwp-x64.cmake" "-DFETCHCONTENT_SOURCE_DIR_SDL=<path to SDL3-uwp clone>"
 #   cmake --build build/xbox-uwp-x64 --config RelWithDebInfo --target dusklight
-# (no -G: CMake picks the newest installed Visual Studio; quote the -D argument in PowerShell)
+# (no -G: CMake picks the newest installed Visual Studio; quote the -D arguments in PowerShell)
 #
 # STATUS: scaffolding only. See docs/xbox-port.md for the known blockers.
 
@@ -32,6 +32,8 @@ set(BOREALIS_ENABLE_SENTRY OFF CACHE BOOL "" FORCE)
 set(BOREALIS_HTTP_BACKEND none CACHE STRING "" FORCE)
 
 # Aurora has no prebuilt SDL3/Dawn/nod packages for WindowsStore, so build from source.
+# SDL3 comes from the UWP-capable fork (upstream #errors on UWP); the fork is supplied through
+# -DFETCHCONTENT_SOURCE_DIR_SDL=<clone> (see platforms/xbox/ci.ps1).
 set(AURORA_SDL3_PROVIDER vendor CACHE STRING "" FORCE)
 set(AURORA_SDL3_LINKAGE static CACHE STRING "" FORCE)
 set(AURORA_DAWN_PROVIDER vendor CACHE STRING "" FORCE)
@@ -54,3 +56,9 @@ set(CMAKE_CXX_FLAGS_INIT "/sdl-")
 # sqlite3 (Aurora's shader/pipeline cache) uses CreateFileA/W, GetFileSize, HeapValidate etc., which
 # are not in the UWP app API partition. SQLITE_OS_WINRT selects its WinRT file layer instead.
 set(CMAKE_C_FLAGS_INIT "${CMAKE_C_FLAGS_INIT} /DSQLITE_OS_WINRT=1")
+
+# The root project sets CMAKE_CXX_STANDARD 20, which SDL inherits, but SDL's WinRT sources use
+# C++/CX (/ZW) and that is incompatible with /std:c++20. This include (run once, at the top-level
+# project() call) overrides the standard on the SDL targets only.
+get_filename_component(_dusk_xbox_project_include "${CMAKE_CURRENT_LIST_DIR}/../../platforms/xbox/xbox-project.cmake" ABSOLUTE)
+list(APPEND CMAKE_PROJECT_TOP_LEVEL_INCLUDES "${_dusk_xbox_project_include}")
