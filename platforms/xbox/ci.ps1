@@ -73,6 +73,13 @@ if ($sdlHead -ne $sdlUwpCommit) {
     Write-Host "::warning::SDL3-uwp branch $sdlUwpBranch is at $sdlHead, expected $sdlUwpCommit"
 }
 
+# --- Patch third-party submodules (Win32-only code that does not build for UWP) ---
+./platforms/xbox/Apply-Patches.ps1 2>&1 | Tee-Object -FilePath patches.log
+if ($LASTEXITCODE -ne 0) {
+    Write-Host '################ PATCHING FAILED: an anchor in a submodule did not match (see patches.log) ################'
+    exit 1
+}
+
 # --- Configure ---
 # No -G: CMake picks the newest installed Visual Studio generator (required for WindowsStore).
 # The -D arguments are quoted so PowerShell does not split them at dots.
@@ -88,6 +95,8 @@ if ($configureExit -ne 0) {
 Write-Host 'Configure succeeded'
 
 # --- Build ---
+# /m:1 is NOT used; MSBuild keeps going past a failing project, so one run reports every independent
+# error. (-k is not needed for the VS generator.)
 cmake --build $buildDir --config $config --target dusklight 2>&1 | Tee-Object -FilePath build.log | Out-Null
 $buildExit = $LASTEXITCODE
 if ($buildExit -ne 0) {

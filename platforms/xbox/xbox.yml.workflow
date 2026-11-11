@@ -35,6 +35,7 @@ jobs:
           path: |
             configure.log
             build.log
+            patches.log
             sdl-clone.log
             vswhere.log
             build/xbox-uwp-x64/CMakeFiles/CMakeConfigureLog.yaml

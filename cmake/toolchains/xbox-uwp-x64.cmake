@@ -3,7 +3,8 @@
 # CMake only supports CMAKE_SYSTEM_NAME=WindowsStore with the Visual Studio generators,
 # so this does not work with the Ninja presets used by the other platforms.
 #
-# Usage:
+# Usage (see platforms/xbox/ci.ps1, which also fetches SDL3-uwp and patches the submodules):
+#   ./platforms/xbox/Apply-Patches.ps1
 #   cmake -S . -B build/xbox-uwp-x64 -A x64 "-DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/xbox-uwp-x64.cmake" "-DFETCHCONTENT_SOURCE_DIR_SDL=<path to SDL3-uwp clone>"
 #   cmake --build build/xbox-uwp-x64 --config RelWithDebInfo --target dusklight
 # (no -G: CMake picks the newest installed Visual Studio; quote the -D arguments in PowerShell)
@@ -50,8 +51,10 @@ set(TINT_BUILD_IR_BINARY OFF CACHE BOOL "" FORCE)
 
 # UWP projects enable /sdl by default. /sdl promotes C4146, C4703 and C4996 to errors, which breaks
 # third-party code (Dawn Device.cpp / BufferD3D11.cpp, libpng pngread.c / pngwrite.c). Turn it off.
-set(CMAKE_C_FLAGS_INIT "/sdl-")
-set(CMAKE_CXX_FLAGS_INIT "/sdl-")
+# DUSK_XBOX_UWP=1 is defined for every C/C++ file so code (and platforms/xbox/Apply-Patches.ps1)
+# can distinguish UWP from desktop Windows.
+set(CMAKE_C_FLAGS_INIT "/sdl- /DDUSK_XBOX_UWP=1")
+set(CMAKE_CXX_FLAGS_INIT "/sdl- /DDUSK_XBOX_UWP=1")
 
 # sqlite3 (Aurora's shader/pipeline cache) uses CreateFileA/W, GetFileSize, HeapValidate etc., which
 # are not in the UWP app API partition. SQLITE_OS_WINRT selects its WinRT file layer instead.
