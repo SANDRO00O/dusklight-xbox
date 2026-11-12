@@ -53,6 +53,13 @@ Patch-File 'extern/aurora/lib/system_info.cpp' '(?m)^#if _WIN32(?=\r?$)' '#if _W
 # includes, the ANSI helper, and the ResolveDolphinCardPath implementation.
 Patch-File 'extern/aurora/lib/card/DolphinCardPath.cpp' '(?m)^#if WIN32(?=\r?$)' '#if WIN32 && !defined(DUSK_XBOX_UWP)' 3
 
+# --- aurora: cmake/AuroraCopyRuntimeDLLs.cmake -------------------------------------------------
+# aurora_copy_runtime_dlls() adds a POST_BUILD `cmake -E copy_if_different $<TARGET_RUNTIME_DLLS:...>
+# <dir>`. With only static libraries the DLL list is empty, so cmake prints its usage and the build
+# fails after a successful link. There are no runtime DLLs to copy (or install) for UWP, so return
+# early from both helper functions (two `  if (NOT WIN32)` lines).
+Patch-File 'extern/aurora/cmake/AuroraCopyRuntimeDLLs.cmake' '(?m)^  if \(NOT WIN32\)(?=\r?$)' '  if (NOT WIN32 OR DUSK_PLATFORM_XBOX) # DUSK_XBOX_UWP: static libs, no runtime DLLs' 2
+
 # --- borealis: src/io.cpp ----------------------------------------------------------------------
 # CreateFileW is desktop-only; UWP provides CreateFile2. Shim it right after <Windows.h> so both
 # uses (RandomAccessFile::open and atomic_replace) keep their code unchanged.

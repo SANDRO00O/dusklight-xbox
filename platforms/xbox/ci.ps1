@@ -95,8 +95,7 @@ if ($configureExit -ne 0) {
 Write-Host 'Configure succeeded'
 
 # --- Build ---
-# /m:1 is NOT used; MSBuild keeps going past a failing project, so one run reports every independent
-# error. (-k is not needed for the VS generator.)
+# MSBuild keeps going past a failing project, so one run reports every independent error.
 cmake --build $buildDir --config $config --target dusklight 2>&1 | Tee-Object -FilePath build.log | Out-Null
 $buildExit = $LASTEXITCODE
 if ($buildExit -ne 0) {
@@ -105,6 +104,20 @@ if ($buildExit -ne 0) {
 }
 Write-Host 'Build succeeded'
 
-# --- AppX assets (only after a successful build) ---
+# --- Collect the AppX/MSIX package CMake's WindowsStore support produced ---
+# Copied under Assets/_package so the workflow's existing artifact path (build/xbox-uwp-x64/Assets/)
+# uploads it without a workflow change.
+$assetsDir = Join-Path $buildDir 'Assets'
+$pkgSrc = Join-Path $buildDir 'AppPackages'
+New-Item -ItemType Directory -Force -Path $assetsDir | Out-Null
+if (Test-Path $pkgSrc) {
+    Copy-Item -Recurse -Force $pkgSrc (Join-Path $assetsDir '_package')
+    Write-Host '--- package files ---'
+    Get-ChildItem -Recurse (Join-Path $assetsDir '_package') -File | ForEach-Object { '{0,12:N0}  {1}' -f $_.Length, $_.FullName.Substring((Get-Location).Path.Length + 1) }
+} else {
+    Write-Host "::warning::$pkgSrc does not exist, no package was produced"
+}
+
+# --- AppX assets ---
 ./platforms/xbox/Generate-Assets.ps1 -InputPng res/icon.png -OutputDir "$buildDir/Assets"
 exit 0
