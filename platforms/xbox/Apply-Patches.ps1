@@ -60,6 +60,20 @@ Patch-File 'extern/aurora/lib/card/DolphinCardPath.cpp' '(?m)^#if WIN32(?=\r?$)'
 # early from both helper functions (two `  if (NOT WIN32)` lines).
 Patch-File 'extern/aurora/cmake/AuroraCopyRuntimeDLLs.cmake' '(?m)^  if \(NOT WIN32\)(?=\r?$)' '  if (NOT WIN32 OR DUSK_PLATFORM_XBOX) # DUSK_XBOX_UWP: static libs, no runtime DLLs' 2
 
+# --- aurora: lib/dawn/BackendBinding.cpp -------------------------------------------------------
+# Only a Win32 HWND surface exists. SDL3-uwp has no HWND; it exposes the CoreWindow (an IInspectable)
+# as SDL_PROP_WINDOW_WINRT_WINDOW_POINTER, which Dawn takes as SurfaceSourceWindowsCoreWindow. The
+# branch goes before the SDL_PLATFORM_WIN32 one so it wins even if the fork defines both.
+$surface = @'
+#elif defined(DUSK_XBOX_UWP)
+  std::shared_ptr<wgpu::SurfaceSourceWindowsCoreWindow> desc =
+      std::make_shared<wgpu::SurfaceSourceWindowsCoreWindow>();
+  desc->coreWindow = SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WINRT_WINDOW_POINTER, nullptr);
+  return std::move(desc);
+#elif defined(SDL_PLATFORM_WIN32)
+'@
+Patch-File 'extern/aurora/lib/dawn/BackendBinding.cpp' '(?m)^#elif defined\(SDL_PLATFORM_WIN32\)\r?$' ($surface -replace '\r?\n$', '') 1
+
 # --- borealis: src/io.cpp ----------------------------------------------------------------------
 # CreateFileW is desktop-only; UWP provides CreateFile2. Shim it right after <Windows.h> so both
 # uses (RandomAccessFile::open and atomic_replace) keep their code unchanged.
