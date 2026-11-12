@@ -1,4 +1,13 @@
-#if _WIN32
+// Desktop Win32 only: the GUI entry point, console attach and CreateProcess restart below need
+// APIs (shell32 CommandLineToArgvW, AttachConsole, ...) that do not exist in UWP. The Xbox (UWP)
+// build defines DUSK_XBOX_UWP and takes the generic main() path instead.
+#if defined(_WIN32) && !defined(DUSK_XBOX_UWP)
+#define DUSK_DESKTOP_WIN32 1
+#else
+#define DUSK_DESKTOP_WIN32 0
+#endif
+
+#if DUSK_DESKTOP_WIN32
 #define WINDOWS_LEAN_AND_MEAN
 #include <Windows.h>
 #include <shellapi.h>
@@ -34,7 +43,7 @@ namespace {
 
 bool RestartProcess(int argc, char* argv[]) {
 #if defined(__ANDROID__) || (defined(TARGET_OS_IOS) && TARGET_OS_IOS) ||                           \
-    (defined(TARGET_OS_TV) && TARGET_OS_TV)
+    (defined(TARGET_OS_TV) && TARGET_OS_TV) || defined(DUSK_XBOX_UWP)
     (void)argc;
     (void)argv;
     return false;
@@ -112,7 +121,7 @@ bool RestartProcess(int argc, char* argv[]) {
 #endif
 }
 
-#if _WIN32
+#if DUSK_DESKTOP_WIN32
 bool ShouldShowWindowsConsole(int argc, char* argv[]) {
     if (const auto* env = std::getenv("DUSK_CONSOLE")) {
         if (env[0] != '\0' && env[0] != '0') {
@@ -225,7 +234,7 @@ int main(int argc, char* argv[]) {
     return DuskMain(argc, argv);
 }
 
-#if _WIN32
+#if DUSK_DESKTOP_WIN32
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     return RunWindowsGuiEntryPoint();
 }
