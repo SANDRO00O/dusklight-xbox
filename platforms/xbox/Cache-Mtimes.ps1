@@ -26,14 +26,20 @@ $ErrorActionPreference = 'Continue'
 $stampPath = Join-Path $RepoRoot $StampFile
 $oldDate = [DateTime]::new(2020, 1, 1, 0, 0, 0, [DateTimeKind]::Utc)
 
-function Git([string]$Dir, [string[]]$GitArgs) {
-    & git -C $Dir -c core.quotepath=off @GitArgs 2>$null
+# One-off: the first cached build (workflow run 117453502716, commit below) wrote an empty stamp
+# because of a bug in this script (a function named Git shadowed git.exe and recursed). Its objects
+# were built from this commit with unchanged submodules, so use it when the stamp has no commit.
+$bootstrapCommit = '789faead42f9353d38e0010dd787bb13725d14f2'
+
+# NOT named Git: PowerShell command names are case-insensitive and functions win over executables.
+function Invoke-Git([string]$Dir, [string[]]$GitArgs) {
+    & git.exe -C $Dir -c core.quotepath=off @GitArgs 2>$null
 }
 
 function Get-Submodules {
     Push-Location $RepoRoot
     try {
-        $r = git submodule foreach --recursive --quiet 'echo $displaypath' 2>$null
+        $r = git.exe submodule foreach --recursive --quiet 'echo $displaypath' 2>$null
         return @($r | Where-Object { $_ })
     } finally {
         Pop-Location
@@ -43,14 +49,14 @@ function Get-Submodules {
 function Set-OldMtimes([string]$Dir, [string]$OldSha) {
     if (-not $OldSha) { return 'no recorded commit, left untouched' }
     $skip = New-Object 'System.Collections.Generic.HashSet[string]'
-    $head = (Git $Dir @('rev-parse', 'HEAD')) | Select-Object -First 1
+    $head = (Invoke-Git $Dir @('rev-parse', 'HEAD')) | Select-Object -First 1
     if ($head -ne $OldSha) {
-        Git $Dir @('cat-file', '-e', "${OldSha}^{commit}") | Out-Null
+        Invoke-Git $Dir @('cat-file', '-e', "${OldSha}^{commit}") | Out-Null
         if ($LASTEXITCODE -ne 0) { return "old commit $OldSha not available, left untouched (full rebuild)" }
-        foreach ($f in (Git $Dir @('diff', '--name-only', '--no-renames', $OldSha, 'HEAD'))) { [void]$skip.Add($f) }
+        foreach ($f in (Invoke-Git $Dir @('diff', '--name-only', '--no-renames', $OldSha, 'HEAD'))) { [void]$skip.Add($f) }
     }
     $n = 0
-    foreach ($f in (Git $Dir @('ls-files'))) {
+    foreach ($f in (Invoke-Git $Dir @('ls-files'))) {
         if ($skip.Contains($f)) { continue }
         try {
             [System.IO.File]::SetLastWriteTimeUtc((Join-Path $Dir $f), $oldDate)
@@ -67,21 +73,39 @@ if ($Mode -eq 'Restore') {
     }
     $stamp = Get-Content $stampPath -Raw | ConvertFrom-Json
     $sw = [Diagnostics.Stopwatch]::StartNew()
-    Write-Host ('cache: main repo (' + $stamp.main + '): ' + (Set-OldMtimes $RepoRoot $stamp.main))
     $subs = @{}
     if ($stamp.subs) { $stamp.subs.PSObject.Properties | ForEach-Object { $subs[$_.Name] = $_.Value } }
+    $mainOld = $stamp.main
+    $bootstrapped = $false
+    if (-not $mainOld) {
+        $mainOld = $bootstrapCommit
+        $bootstrapped = $true
+        Write-Host "cache: stamp has no commit, assuming the cache was built from $bootstrapCommit"
+    }
+    Write-Host ('cache: main repo (' + $mainOld + '): ' + (Set-OldMtimes $RepoRoot $mainOld))
     foreach ($s in (Get-Submodules)) {
-        Write-Host ('cache: ' + $s + ': ' + (Set-OldMtimes (Join-Path $RepoRoot $s) $subs[$s]))
+        $subOld = $subs[$s]
+        if (-not $subOld -and $bootstrapped) {
+            # Bootstrap only: the submodule pins did not change since that build, so use what the
+            # superproject commit recorded then.
+            $subOld = ((Invoke-Git $RepoRoot @('ls-tree', $mainOld, $s)) | Select-Object -First 1) -replace '^\d+\s+commit\s+([0-9a-f]{40}).*$', '$1'
+            if ($subOld -notmatch '^[0-9a-f]{40}$') { $subOld = $null }
+        }
+        Write-Host ('cache: ' + $s + ': ' + (Set-OldMtimes (Join-Path $RepoRoot $s) $subOld))
     }
     Write-Host ('cache: mtime restore took {0:N0}s' -f $sw.Elapsed.TotalSeconds)
     exit 0
 }
 
 # Save
-$main = (Git $RepoRoot @('rev-parse', 'HEAD')) | Select-Object -First 1
+$main = (Invoke-Git $RepoRoot @('rev-parse', 'HEAD')) | Select-Object -First 1
+if (-not $main) {
+    Write-Host '::warning::cache: could not read HEAD, stamp not written'
+    exit 0
+}
 $subs = [ordered]@{}
 foreach ($s in (Get-Submodules)) {
-    $subs[$s] = (Git (Join-Path $RepoRoot $s) @('rev-parse', 'HEAD')) | Select-Object -First 1
+    $subs[$s] = (Invoke-Git (Join-Path $RepoRoot $s) @('rev-parse', 'HEAD')) | Select-Object -First 1
 }
 New-Item -ItemType Directory -Force -Path (Split-Path $stampPath) | Out-Null
 @{ main = $main; subs = $subs } | ConvertTo-Json | Set-Content -Path $stampPath -Encoding utf8
