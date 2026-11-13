@@ -62,12 +62,14 @@ Patch-File 'extern/aurora/cmake/AuroraCopyRuntimeDLLs.cmake' '(?m)^  if \(NOT WI
 
 # --- aurora: lib/dawn/BackendBinding.cpp -------------------------------------------------------
 # Only a Win32 HWND surface exists. SDL3-uwp has no HWND; it exposes the CoreWindow (an IInspectable)
-# as SDL_PROP_WINDOW_WINRT_WINDOW_POINTER, which Dawn takes as SurfaceSourceWindowsCoreWindow. The
-# branch goes before the SDL_PLATFORM_WIN32 one so it wins even if the fork defines both.
+# as SDL_PROP_WINDOW_WINRT_WINDOW_POINTER. Dawn's CoreWindow surface type is the Dawn-specific
+# SurfaceDescriptorFromWindowsCoreWindow (dawn.json: "surface descriptor from windows core window",
+# member coreWindow); the SurfaceSource* spelling only exists for the standardised types such as
+# HWND. The branch goes before the SDL_PLATFORM_WIN32 one so it wins even if the fork defines both.
 $surface = @'
 #elif defined(DUSK_XBOX_UWP)
-  std::shared_ptr<wgpu::SurfaceSourceWindowsCoreWindow> desc =
-      std::make_shared<wgpu::SurfaceSourceWindowsCoreWindow>();
+  std::shared_ptr<wgpu::SurfaceDescriptorFromWindowsCoreWindow> desc =
+      std::make_shared<wgpu::SurfaceDescriptorFromWindowsCoreWindow>();
   desc->coreWindow = SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WINRT_WINDOW_POINTER, nullptr);
   return std::move(desc);
 #elif defined(SDL_PLATFORM_WIN32)
