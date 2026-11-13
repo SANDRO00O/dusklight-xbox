@@ -55,12 +55,17 @@ function(_dusk_xbox_freetype_system)
   endif()
 endfunction()
 
-# --- Link stubs for the game executable ---------------------------------------------------------
-# Dawn's abseil references GetWindowsLocalTimeZone(), which is not built for UWP (see the file).
+# --- Extra sources for the game executable ------------------------------------------------------
+# * abseil_uwp_stubs.cpp: Dawn's abseil references GetWindowsLocalTimeZone(), which is not built for
+#   UWP (see the file).
+# * xbox_gfx_probe.cpp: SEH-guarded D3D11/D3D12 probe run before Aurora initialises (see the file and
+#   the m_Do_main.cpp patch in Apply-Patches.ps1).
 function(_dusk_xbox_link_stubs)
   if(TARGET dusklight)
-    target_sources(dusklight PRIVATE "${CMAKE_SOURCE_DIR}/platforms/xbox/abseil_uwp_stubs.cpp")
-    message(STATUS "xbox: added abseil_uwp_stubs.cpp to dusklight")
+    target_sources(dusklight PRIVATE
+      "${CMAKE_SOURCE_DIR}/platforms/xbox/abseil_uwp_stubs.cpp"
+      "${CMAKE_SOURCE_DIR}/platforms/xbox/xbox_gfx_probe.cpp")
+    message(STATUS "xbox: added abseil_uwp_stubs.cpp and xbox_gfx_probe.cpp to dusklight")
   endif()
 endfunction()
 

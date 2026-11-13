@@ -1,18 +1,20 @@
 <#
 .SYNOPSIS
   Applies the small source patches the UWP (Xbox) build needs to the third-party submodules
-  (extern/aurora, extern/borealis), which point at upstream repositories.
+  (extern/aurora, extern/borealis) and, for the graphics probe hook, to src/m_Do/m_Do_main.cpp.
 
   Idempotent: a file that already contains DUSK_XBOX_UWP is skipped. Fails loudly (exit 1) when an
   anchor is not found exactly as many times as expected, which means upstream changed and the patch
   needs to be revisited. Run from ci.ps1 before configuring. See docs/xbox-port.md.
 
-  NOTE (graphics backend): there is deliberately NO patch for the backend order. An attempt to drop
-  D3D12 so Aurora would use D3D11 (build 789faead) failed on a real Xbox One S: Dawn's D3D11 backend
-  requests feature level 11.1/11.0 and D3D11CreateDevice returns DXGI_ERROR_UNSUPPORTED, because
-  Xbox One only offers D3D11 feature level 10.1 to UWP apps and games. On Xbox One D3D12 (FL 11.0)
-  exists only when the package runs in Game mode (Dev Home > Games & apps > Dusklight > View >
-  View details > App type = Game). In App mode d3d12.dll loads but the driver (umd12ddi.dll) crashes.
+  Every file patched here (now or in the past) must be listed in $alwaysFresh of Cache-Mtimes.ps1.
+
+  NOTE (graphics backend): there is deliberately NO patch for the backend order in aurora.cpp. An
+  attempt to drop D3D12 so Aurora would use D3D11 (build 789faead) failed on a real Xbox One S:
+  Dawn's D3D11 backend requests feature level 11.1/11.0 and D3D11CreateDevice returns
+  DXGI_ERROR_UNSUPPORTED, because Xbox One only offers D3D11 feature level 10.1 to UWP apps and
+  games. On Xbox One D3D12 (FL 11.0) exists only in Game mode. Instead of guessing, the game runs
+  platforms/xbox/xbox_gfx_probe.cpp before Aurora (hooked in below) and picks the backend from it.
 #>
 param(
     [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
@@ -101,6 +103,36 @@ static inline HANDLE CreateFileW(LPCWSTR name, DWORD access, DWORD share, LPSECU
 #endif
 '@
 Patch-File 'extern/borealis/src/io.cpp' '(?m)^#include <Windows\.h>(?=\r?$)' $shim.TrimEnd() 1
+
+# --- game: src/m_Do/m_Do_main.cpp --------------------------------------------------------------
+# Run the SEH-guarded graphics probe (platforms/xbox/xbox_gfx_probe.cpp) right before Aurora creates
+# the window and the GPU device. Result bits: 1 = D3D12 works, 2 = D3D11 feature level >= 11.0
+# works, 4 = probe could not run. With D3D12 usable (or the probe inconclusive) Aurora keeps its
+# normal Auto order (D3D12 first). D3D12 broken but D3D11 usable: force D3D11. Neither: log and exit
+# instead of letting Aurora walk into the crashing D3D12 backend. Results are in gfx-probe.log next
+# to the game log.
+$probe = @'
+#ifdef DUSK_XBOX_UWP
+        {
+            int dusk_xbox_probe_graphics(const wchar_t* dir);
+            const int xboxGfx = dusk_xbox_probe_graphics(dusk::CachePath.c_str());
+            DuskLog.info("Xbox graphics probe result: {} (1=D3D12, 2=D3D11 FL11, 4=inconclusive), see gfx-probe.log", xboxGfx);
+            if ((xboxGfx & 4) == 0 && (xboxGfx & 1) == 0) {
+                if ((xboxGfx & 2) != 0) {
+                    config.desiredBackend = BACKEND_D3D11;
+                } else {
+                    DuskLog.warn("Xbox: no usable GPU backend, see gfx-probe.log. Exiting.");
+                    borealis::log::shutdown();
+                    fflush(stdout);
+                    fflush(stderr);
+                    return 3;
+                }
+            }
+        }
+#endif
+        auroraInfo = aurora_initialize(argc, argv, &config);
+'@
+Patch-File 'src/m_Do/m_Do_main.cpp' '(?m)^        auroraInfo = aurora_initialize\(argc, argv, &config\);(?=\r?$)' $probe.TrimEnd() 1
 
 if ($script:failed) { exit 1 }
 exit 0

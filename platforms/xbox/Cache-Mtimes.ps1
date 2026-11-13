@@ -39,7 +39,8 @@ foreach ($p in @(
     'extern/aurora/cmake/AuroraCopyRuntimeDLLs.cmake',
     'extern/aurora/lib/dawn/BackendBinding.cpp',
     'extern/aurora/lib/aurora.cpp',          # patched in build 789faead (D3D12 skip), patch since removed
-    'extern/borealis/src/io.cpp'
+    'extern/borealis/src/io.cpp',
+    'src/m_Do/m_Do_main.cpp'                 # graphics probe hook
 )) { [void]$alwaysFresh.Add($p) }
 
 # One-off: the first cached build (workflow run 117453502716, commit below) wrote an empty stamp
