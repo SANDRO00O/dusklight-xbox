@@ -57,6 +57,8 @@ if (Test-Path $vswhere) {
 }
 
 # --- Fetch the UWP SDL3 fork ---
+# build/ext is part of the CI cache, so on a cache hit the clone (with its original file mtimes) is
+# reused and SDL is not rebuilt.
 if (-not (Test-Path (Join-Path $sdlUwpDir 'CMakeLists.txt'))) {
     Write-Host "Cloning $sdlUwpRepo ($sdlUwpBranch) into $sdlUwpDir"
     New-Item -ItemType Directory -Force -Path (Split-Path $sdlUwpDir) | Out-Null
@@ -73,6 +75,10 @@ if ($sdlHead -ne $sdlUwpCommit) {
     Write-Host "::warning::SDL3-uwp branch $sdlUwpBranch is at $sdlHead, expected $sdlUwpCommit"
 }
 
+# --- Incremental build cache: give unchanged sources an old mtime (no-op on a cold build) ---
+# Must run before Apply-Patches.ps1. See Cache-Mtimes.ps1.
+./platforms/xbox/Cache-Mtimes.ps1 -Mode Restore 2>&1 | Tee-Object -FilePath cache-restore.log
+
 # --- Patch third-party submodules (Win32-only code that does not build for UWP) ---
 ./platforms/xbox/Apply-Patches.ps1 2>&1 | Tee-Object -FilePath patches.log
 if ($LASTEXITCODE -ne 0) {
@@ -86,8 +92,10 @@ if ($LASTEXITCODE -ne 0) {
 # FETCHCONTENT_SOURCE_DIR_SDL makes Aurora's FetchContent_Declare(SDL ...) use the fork instead of
 # downloading upstream SDL (this also skips Aurora's Android-only patch commands).
 Write-Host "Configuring: cmake -S . -B $buildDir -A x64 -DCMAKE_TOOLCHAIN_FILE=$toolchain -DFETCHCONTENT_SOURCE_DIR_SDL=$sdlUwpDir"
+$sw = [Diagnostics.Stopwatch]::StartNew()
 cmake -S . -B $buildDir -A x64 "-DCMAKE_TOOLCHAIN_FILE=$toolchain" "-DFETCHCONTENT_SOURCE_DIR_SDL=$sdlUwpDir" 2>&1 | Tee-Object -FilePath configure.log | Out-Null
 $configureExit = $LASTEXITCODE
+Write-Host ('Configure took {0:N0}s' -f $sw.Elapsed.TotalSeconds)
 if ($configureExit -ne 0) {
     Show-Failure 'CONFIGURE' 'configure.log' $configureExit
     exit $configureExit
@@ -96,13 +104,18 @@ Write-Host 'Configure succeeded'
 
 # --- Build ---
 # MSBuild keeps going past a failing project, so one run reports every independent error.
+$sw.Restart()
 cmake --build $buildDir --config $config --target dusklight 2>&1 | Tee-Object -FilePath build.log | Out-Null
 $buildExit = $LASTEXITCODE
+Write-Host ('Build took {0:N0}s' -f $sw.Elapsed.TotalSeconds)
 if ($buildExit -ne 0) {
     Show-Failure 'BUILD' 'build.log' $buildExit
     exit $buildExit
 }
 Write-Host 'Build succeeded'
+
+# Record the commits this build corresponds to (only after a successful build, see Cache-Mtimes.ps1).
+./platforms/xbox/Cache-Mtimes.ps1 -Mode Save
 
 $assetsDir = Join-Path $buildDir 'Assets'
 New-Item -ItemType Directory -Force -Path $assetsDir | Out-Null
@@ -126,9 +139,11 @@ if ((Test-Path $exe) -and (Test-Path $vswhere)) {
 
 # --- Collect the AppX/MSIX package CMake's WindowsStore support produced ---
 # Copied under Assets/_package so the workflow's existing artifact path (build/xbox-uwp-x64/Assets/)
-# uploads it without a workflow change.
+# uploads it without a workflow change. The old copy is removed first: with a restored build cache
+# it could still hold the package of an earlier run.
 $pkgSrc = Join-Path $buildDir 'AppPackages'
 if (Test-Path $pkgSrc) {
+    Remove-Item -Recurse -Force (Join-Path $assetsDir '_package') -ErrorAction SilentlyContinue
     Copy-Item -Recurse -Force $pkgSrc (Join-Path $assetsDir '_package')
     Write-Host '--- package files ---'
     Get-ChildItem -Recurse (Join-Path $assetsDir '_package') -File | ForEach-Object { '{0,12:N0}  {1}' -f $_.Length, $_.FullName.Substring((Get-Location).Path.Length + 1) }
