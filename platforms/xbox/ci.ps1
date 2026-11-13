@@ -104,12 +104,30 @@ if ($buildExit -ne 0) {
 }
 Write-Host 'Build succeeded'
 
+$assetsDir = Join-Path $buildDir 'Assets'
+New-Item -ItemType Directory -Force -Path $assetsDir | Out-Null
+
+# --- Imports of the produced exe (written to Assets/imports.log) ---
+# The Rust crate `nod` is built for the desktop target and asks for kernel32;ntdll;userenv;ws2_32;dbghelp.
+# Whether those DLLs can be loaded by a UWP app on the console is unknown, so list every imported DLL
+# (and the functions of the suspicious ones) to review before testing on hardware.
+$exe = Join-Path $buildDir "$config/dusklight.exe"
+if ((Test-Path $exe) -and (Test-Path $vswhere)) {
+    $dumpbin = & $vswhere -latest -products * -find 'VC\Tools\MSVC\**\bin\Hostx64\x64\dumpbin.exe' 2>$null | Select-Object -First 1
+    if ($dumpbin) {
+        $importsLog = Join-Path $assetsDir 'imports.log'
+        & $dumpbin /nologo /imports $exe 2>&1 | Out-File -FilePath $importsLog -Encoding utf8
+        Write-Host '--- imported DLLs of dusklight.exe ---'
+        Select-String -Path $importsLog -Pattern '^\s+\S+\.dll\s*$' | ForEach-Object { $_.Line.Trim() } | Sort-Object -Unique | ForEach-Object { '  ' + $_ }
+    } else {
+        Write-Host '::warning::dumpbin.exe not found, imports.log skipped'
+    }
+}
+
 # --- Collect the AppX/MSIX package CMake's WindowsStore support produced ---
 # Copied under Assets/_package so the workflow's existing artifact path (build/xbox-uwp-x64/Assets/)
 # uploads it without a workflow change.
-$assetsDir = Join-Path $buildDir 'Assets'
 $pkgSrc = Join-Path $buildDir 'AppPackages'
-New-Item -ItemType Directory -Force -Path $assetsDir | Out-Null
 if (Test-Path $pkgSrc) {
     Copy-Item -Recurse -Force $pkgSrc (Join-Path $assetsDir '_package')
     Write-Host '--- package files ---'

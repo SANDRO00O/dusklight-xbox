@@ -61,7 +61,11 @@ set(CMAKE_CXX_FLAGS_INIT "/sdl- /DDUSK_XBOX_UWP=1")
 set(CMAKE_C_FLAGS_INIT "${CMAKE_C_FLAGS_INIT} /DSQLITE_OS_WINRT=1")
 
 # The root project sets CMAKE_CXX_STANDARD 20, which SDL inherits, but SDL's WinRT sources use
-# C++/CX (/ZW) and that is incompatible with /std:c++20. This include (run once, at the top-level
-# project() call) overrides the standard on the SDL targets only.
+# C++/CX (/ZW) and that is incompatible with /std:c++20. platforms/xbox/xbox-project.cmake (run once,
+# at the top-level project() call) overrides the standard on the SDL targets, swaps FreeType's
+# Win32 system layer for the portable one, and adds link stubs.
+# CMake evaluates a toolchain file more than once, so only append the include the first time.
 get_filename_component(_dusk_xbox_project_include "${CMAKE_CURRENT_LIST_DIR}/../../platforms/xbox/xbox-project.cmake" ABSOLUTE)
-list(APPEND CMAKE_PROJECT_TOP_LEVEL_INCLUDES "${_dusk_xbox_project_include}")
+if(NOT _dusk_xbox_project_include IN_LIST CMAKE_PROJECT_TOP_LEVEL_INCLUDES)
+  list(APPEND CMAKE_PROJECT_TOP_LEVEL_INCLUDES "${_dusk_xbox_project_include}")
+endif()
