@@ -76,6 +76,14 @@ $surface = @'
 '@
 Patch-File 'extern/aurora/lib/dawn/BackendBinding.cpp' '(?m)^#elif defined\(SDL_PLATFORM_WIN32\)\r?$' ($surface -replace '\r?\n$', '') 1
 
+# --- aurora: lib/aurora.cpp --------------------------------------------------------------------
+# Xbox One S test (build 679165818): with BACKEND_AUTO Aurora tries BACKEND_D3D12 first and the app
+# dies with EXCEPTION_ACCESS_VIOLATION inside the console's user-mode driver (umd12ddi.dll, reached
+# through D3D12Core.dll from Dawn's D3D12 backend) during graphics init. UWP apps on Xbox are meant
+# to use D3D11 (feature level 10.1 on Xbox One), so drop D3D12 from PreferredBackendOrder. Auto then
+# resolves to D3D11, falling back to the Null backend (ImGui UI only) instead of crashing.
+Patch-File 'extern/aurora/lib/aurora.cpp' '(?m)^#ifdef DAWN_ENABLE_BACKEND_D3D12(?=\r?$)' '#if defined(DAWN_ENABLE_BACKEND_D3D12) && !defined(DUSK_XBOX_UWP) // DUSK_XBOX_UWP: D3D12 crashes in umd12ddi.dll on Xbox One S' 1
+
 # --- borealis: src/io.cpp ----------------------------------------------------------------------
 # CreateFileW is desktop-only; UWP provides CreateFile2. Shim it right after <Windows.h> so both
 # uses (RandomAccessFile::open and atomic_replace) keep their code unchanged.
