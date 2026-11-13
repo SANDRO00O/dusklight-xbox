@@ -9,6 +9,9 @@ name: Xbox (experimental)
 # platforms/xbox/Cache-Mtimes.ps1 fixes file mtimes so MSBuild only rebuilds what changed.
 # The first run after adding this is a normal cold build. Use the no_cache input for a clean build
 # (it also replaces the saved cache), or bump CACHE_VERSION to drop every old cache.
+#
+# Artifacts: xbox-uwp-logs (logs + the installable package, small) and xbox-uwp-symbols (the large
+# *.appxsym debug symbols, only needed to decode crash addresses).
 on:
   workflow_dispatch:
     inputs:
@@ -74,6 +77,7 @@ jobs:
             ~/.cargo/git
           key: ${{ steps.cachekey.outputs.prefix }}${{ github.run_id }}
 
+      # Logs and the installable package, WITHOUT the big debug symbols (they go to the next step).
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v7
@@ -88,4 +92,16 @@ jobs:
             vswhere.log
             build/xbox-uwp-x64/CMakeFiles/CMakeConfigureLog.yaml
             build/xbox-uwp-x64/Assets/
+            !**/*.appxsym
+          if-no-files-found: ignore
+
+      # Debug symbols (*.appxsym is already a zip, so no extra compression). Download this artifact
+      # only when a crash address has to be decoded.
+      - name: Upload symbols
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: xbox-uwp-symbols
+          path: build/xbox-uwp-x64/Assets/_package/**/*.appxsym
+          compression-level: 0
           if-no-files-found: ignore
