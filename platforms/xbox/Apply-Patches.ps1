@@ -1,13 +1,18 @@
 <#
 .SYNOPSIS
-  Applies the small source patches the UWP (Xbox) build needs to the third-party submodules
-  (extern/aurora, extern/borealis) and, for the graphics probe hook, to src/m_Do/m_Do_main.cpp.
+  Applies the small source patches the UWP (Xbox) build needs.
+
+  -Phase Source (default): third-party submodules (extern/aurora, extern/borealis) and the graphics
+                           probe hook in src/m_Do/m_Do_main.cpp. Run before configuring.
+  -Phase Deps:             sources CMake downloads at configure time (Dawn, under
+                           build/xbox-uwp-x64/_deps). Run after configuring, before building.
 
   Idempotent: a file that already contains DUSK_XBOX_UWP is skipped. Fails loudly (exit 1) when an
   anchor is not found exactly as many times as expected, which means upstream changed and the patch
-  needs to be revisited. Run from ci.ps1 before configuring. See docs/xbox-port.md.
+  needs to be revisited. Called from ci.ps1. See docs/xbox-port.md.
 
-  Every file patched here (now or in the past) must be listed in $alwaysFresh of Cache-Mtimes.ps1.
+  Every tracked file patched in the Source phase (now or in the past) must be listed in
+  $alwaysFresh of Cache-Mtimes.ps1.
 
   NOTE (graphics backend): there is deliberately NO patch for the backend order in aurora.cpp. An
   attempt to drop D3D12 so Aurora would use D3D11 (build 789faead) failed on a real Xbox One S:
@@ -17,7 +22,9 @@
   platforms/xbox/xbox_gfx_probe.cpp before Aurora (hooked in below) and picks the backend from it.
 #>
 param(
-    [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
+    [ValidateSet('Source', 'Deps')][string]$Phase = 'Source',
+    [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path,
+    [string]$BuildDir = 'build/xbox-uwp-x64'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -46,6 +53,37 @@ function Patch-File([string]$Rel, [string]$Pattern, [string]$Replacement, [int]$
     [System.IO.File]::WriteAllText($path, $new, $utf8)
     Write-Host "patched: $Rel ($count replacement(s))"
 }
+
+# Several edits to one file, all or none. Every pattern's match count is checked against the original
+# text first. $Edits: array of @{ Pattern = ...; Replacement = ...; Expected = n }.
+function Patch-FileMulti([string]$Rel, [object[]]$Edits) {
+    $path = Join-Path $RepoRoot $Rel
+    if (-not (Test-Path $path)) {
+        Write-Host "::error::patch target missing: $Rel"
+        $script:failed = $true
+        return
+    }
+    $text = [System.IO.File]::ReadAllText($path)
+    if ($text -match 'DUSK_XBOX_UWP') {
+        Write-Host "already patched: $Rel"
+        return
+    }
+    foreach ($e in $Edits) {
+        $count = [regex]::Matches($text, $e.Pattern).Count
+        if ($count -ne $e.Expected) {
+            Write-Host "::error::patch anchor '$($e.Pattern)' in $Rel matched $count time(s), expected $($e.Expected) (upstream changed?)"
+            $script:failed = $true
+            return
+        }
+    }
+    foreach ($e in $Edits) {
+        $text = [regex]::Replace($text, $e.Pattern, $e.Replacement)
+    }
+    [System.IO.File]::WriteAllText($path, $text, $utf8)
+    Write-Host "patched: $Rel ($($Edits.Count) edit(s))"
+}
+
+if ($Phase -eq 'Source') {
 
 # --- aurora: lib/system_info.cpp ---------------------------------------------------------------
 # The Windows branch reads the CPU name through WMI (IWbemLocator, CoSetProxyBlanket, ...) and uses
@@ -106,11 +144,11 @@ Patch-File 'extern/borealis/src/io.cpp' '(?m)^#include <Windows\.h>(?=\r?$)' $sh
 
 # --- game: src/m_Do/m_Do_main.cpp --------------------------------------------------------------
 # Run the SEH-guarded graphics probe (platforms/xbox/xbox_gfx_probe.cpp) right before Aurora creates
-# the window and the GPU device. Result bits: 1 = D3D12 works, 2 = D3D11 feature level >= 11.0
-# works, 4 = probe could not run. With D3D12 usable (or the probe inconclusive) Aurora keeps its
-# normal Auto order (D3D12 first). D3D12 broken but D3D11 usable: force D3D11. Neither: log and exit
-# instead of letting Aurora walk into the crashing D3D12 backend. Results are in gfx-probe.log next
-# to the game log.
+# the window and the GPU device. Result bits: 1 = D3D12 device creation works, 2 = D3D11 feature
+# level >= 11.0 works, 4 = probe could not run. With D3D12 usable (or the probe inconclusive) Aurora
+# keeps its normal Auto order (D3D12 first). D3D12 broken but D3D11 usable: force D3D11. Neither: log
+# and exit instead of letting Aurora walk into the crashing D3D12 backend. Results are in
+# gfx-probe.log next to the game log.
 $probe = @'
 #ifdef DUSK_XBOX_UWP
         {
@@ -133,6 +171,40 @@ $probe = @'
         auroraInfo = aurora_initialize(argc, argv, &config);
 '@
 Patch-File 'src/m_Do/m_Do_main.cpp' '(?m)^        auroraInfo = aurora_initialize\(argc, argv, &config\);(?=\r?$)' $probe.TrimEnd() 1
+
+}
+
+if ($Phase -eq 'Deps') {
+
+# --- Dawn: src/dawn/native/d3d12/D3D12Info.cpp -------------------------------------------------
+# Aurora's Dawn (encounter/dawn @ 1155e0ed) fills D3D12DeviceInfo with ~14 optional
+# ID3D12Device::CheckFeatureSupport queries. On the Xbox One S the user-mode driver (umd12ddi.dll)
+# raises an access violation inside D3D12 device initialisation. The queries are optional (every
+# result only sets a capability flag that defaults to false), so route them all through a helper
+# that runs the call under SEH and treats an exception as "not supported". 16 call sites: 14 in
+# GatherDeviceInfo plus 2 in the Agility-SDK-only linear algebra helper.
+$safeHelper = @'
+namespace dawn::native::d3d12 {
+
+// DUSK_XBOX_UWP: the Xbox One S user-mode driver can raise an access violation for CheckFeatureSupport
+// queries it does not know. Treat that as "feature not supported".
+static HRESULT DuskSafeCheckFeatureSupport(ID3D12Device* device, D3D12_FEATURE feature, void* data, UINT size) {
+    HRESULT hr = E_FAIL;
+    __try {
+        hr = device->CheckFeatureSupport(feature, data, size);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        hr = E_FAIL;
+    }
+    return hr;
+}
+'@
+$edits = @(
+    @{ Pattern = '(?m)^namespace dawn::native::d3d12 \{(?=\r?$)'; Replacement = $safeHelper.TrimEnd(); Expected = 1 },
+    @{ Pattern = 'd3d12Device->CheckFeatureSupport\('; Replacement = 'DuskSafeCheckFeatureSupport(d3d12Device.Get(), '; Expected = 16 }
+)
+Patch-FileMulti "$BuildDir/_deps/dawn-src/src/dawn/native/d3d12/D3D12Info.cpp" $edits
+
+}
 
 if ($script:failed) { exit 1 }
 exit 0

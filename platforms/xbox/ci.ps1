@@ -80,7 +80,7 @@ if ($sdlHead -ne $sdlUwpCommit) {
 ./platforms/xbox/Cache-Mtimes.ps1 -Mode Restore 2>&1 | Tee-Object -FilePath cache-restore.log
 
 # --- Patch third-party submodules (Win32-only code that does not build for UWP) ---
-./platforms/xbox/Apply-Patches.ps1 2>&1 | Tee-Object -FilePath patches.log
+./platforms/xbox/Apply-Patches.ps1 -Phase Source 2>&1 | Tee-Object -FilePath patches.log
 if ($LASTEXITCODE -ne 0) {
     Write-Host '################ PATCHING FAILED: an anchor in a submodule did not match (see patches.log) ################'
     exit 1
@@ -101,6 +101,13 @@ if ($configureExit -ne 0) {
     exit $configureExit
 }
 Write-Host 'Configure succeeded'
+
+# --- Patch sources CMake downloaded at configure time (Dawn) ---
+./platforms/xbox/Apply-Patches.ps1 -Phase Deps 2>&1 | Tee-Object -FilePath patches.log -Append
+if ($LASTEXITCODE -ne 0) {
+    Write-Host '################ DEPENDENCY PATCHING FAILED: an anchor in a downloaded source did not match (see patches.log) ################'
+    exit 1
+}
 
 # --- Build ---
 # MSBuild keeps going past a failing project, so one run reports every independent error.
