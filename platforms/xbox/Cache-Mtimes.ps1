@@ -7,14 +7,19 @@
 
   Restore: before building, set the mtime of every tracked file (main repo + submodules) to a fixed
            old date, EXCEPT files that changed between the commit recorded in the cache and the
-           current commit. Those keep their fresh mtime and get rebuilt. If the old commit is not
-           available (e.g. a shallow submodule) that repository is left untouched = full rebuild of it.
+           current commit, and EXCEPT the files Apply-Patches.ps1 modifies (listed below). Those keep
+           their fresh mtime and get rebuilt. If the old commit is not available (e.g. a shallow
+           submodule) that repository is left untouched = full rebuild of it.
   Save:    after a SUCCESSFUL build, record the current commit of the main repo and of every
            submodule in the stamp file inside the build directory (which is what gets cached). The
            stamp is deliberately not written after a failed build: objects may then be older than the
            sources, and the next run must diff against the last good commit.
 
   Run Restore before Apply-Patches.ps1 (patched files get a new mtime and are rebuilt every run).
+
+  RULE: every file Apply-Patches.ps1 has ever patched must stay in $alwaysFresh, even after the
+  patch is removed. The cached object was compiled from the PATCHED text; once the patch is gone the
+  file is clean in git, would get the old mtime, and the stale object would be linked.
 #>
 param(
     [Parameter(Mandatory)][ValidateSet('Restore', 'Save')][string]$Mode,
@@ -25,6 +30,17 @@ param(
 $ErrorActionPreference = 'Continue'
 $stampPath = Join-Path $RepoRoot $StampFile
 $oldDate = [DateTime]::new(2020, 1, 1, 0, 0, 0, [DateTimeKind]::Utc)
+
+# Paths relative to the repository root, forward slashes.
+$alwaysFresh = New-Object 'System.Collections.Generic.HashSet[string]'
+foreach ($p in @(
+    'extern/aurora/lib/system_info.cpp',
+    'extern/aurora/lib/card/DolphinCardPath.cpp',
+    'extern/aurora/cmake/AuroraCopyRuntimeDLLs.cmake',
+    'extern/aurora/lib/dawn/BackendBinding.cpp',
+    'extern/aurora/lib/aurora.cpp',          # patched in build 789faead (D3D12 skip), patch since removed
+    'extern/borealis/src/io.cpp'
+)) { [void]$alwaysFresh.Add($p) }
 
 # One-off: the first cached build (workflow run 117453502716, commit below) wrote an empty stamp
 # because of a bug in this script (a function named Git shadowed git.exe and recursed). Its objects
@@ -46,7 +62,8 @@ function Get-Submodules {
     }
 }
 
-function Set-OldMtimes([string]$Dir, [string]$OldSha) {
+# $RelDir: the directory's path relative to the repo root ('' for the main repo), for $alwaysFresh.
+function Set-OldMtimes([string]$Dir, [string]$RelDir, [string]$OldSha) {
     if (-not $OldSha) { return 'no recorded commit, left untouched' }
     $skip = New-Object 'System.Collections.Generic.HashSet[string]'
     $head = (Invoke-Git $Dir @('rev-parse', 'HEAD')) | Select-Object -First 1
@@ -55,15 +72,18 @@ function Set-OldMtimes([string]$Dir, [string]$OldSha) {
         if ($LASTEXITCODE -ne 0) { return "old commit $OldSha not available, left untouched (full rebuild)" }
         foreach ($f in (Invoke-Git $Dir @('diff', '--name-only', '--no-renames', $OldSha, 'HEAD'))) { [void]$skip.Add($f) }
     }
+    $prefix = if ($RelDir) { ($RelDir -replace '\\', '/') + '/' } else { '' }
     $n = 0
+    $fresh = 0
     foreach ($f in (Invoke-Git $Dir @('ls-files'))) {
         if ($skip.Contains($f)) { continue }
+        if ($alwaysFresh.Contains($prefix + $f)) { $fresh++; continue }
         try {
             [System.IO.File]::SetLastWriteTimeUtc((Join-Path $Dir $f), $oldDate)
             $n++
         } catch { }
     }
-    return "$n files set to $($oldDate.ToString('yyyy-MM-dd')), $($skip.Count) changed file(s) keep a fresh mtime"
+    return "$n files set to $($oldDate.ToString('yyyy-MM-dd')), $($skip.Count) changed + $fresh patched file(s) keep a fresh mtime"
 }
 
 if ($Mode -eq 'Restore') {
@@ -82,7 +102,7 @@ if ($Mode -eq 'Restore') {
         $bootstrapped = $true
         Write-Host "cache: stamp has no commit, assuming the cache was built from $bootstrapCommit"
     }
-    Write-Host ('cache: main repo (' + $mainOld + '): ' + (Set-OldMtimes $RepoRoot $mainOld))
+    Write-Host ('cache: main repo (' + $mainOld + '): ' + (Set-OldMtimes $RepoRoot '' $mainOld))
     foreach ($s in (Get-Submodules)) {
         $subOld = $subs[$s]
         if (-not $subOld -and $bootstrapped) {
@@ -91,7 +111,7 @@ if ($Mode -eq 'Restore') {
             $subOld = ((Invoke-Git $RepoRoot @('ls-tree', $mainOld, $s)) | Select-Object -First 1) -replace '^\d+\s+commit\s+([0-9a-f]{40}).*$', '$1'
             if ($subOld -notmatch '^[0-9a-f]{40}$') { $subOld = $null }
         }
-        Write-Host ('cache: ' + $s + ': ' + (Set-OldMtimes (Join-Path $RepoRoot $s) $subOld))
+        Write-Host ('cache: ' + $s + ': ' + (Set-OldMtimes (Join-Path $RepoRoot $s) $s $subOld))
     }
     Write-Host ('cache: mtime restore took {0:N0}s' -f $sw.Elapsed.TotalSeconds)
     exit 0
