@@ -6,6 +6,13 @@
   Idempotent: a file that already contains DUSK_XBOX_UWP is skipped. Fails loudly (exit 1) when an
   anchor is not found exactly as many times as expected, which means upstream changed and the patch
   needs to be revisited. Run from ci.ps1 before configuring. See docs/xbox-port.md.
+
+  NOTE (graphics backend): there is deliberately NO patch for the backend order. An attempt to drop
+  D3D12 so Aurora would use D3D11 (build 789faead) failed on a real Xbox One S: Dawn's D3D11 backend
+  requests feature level 11.1/11.0 and D3D11CreateDevice returns DXGI_ERROR_UNSUPPORTED, because
+  Xbox One only offers D3D11 feature level 10.1 to UWP apps and games. On Xbox One D3D12 (FL 11.0)
+  exists only when the package runs in Game mode (Dev Home > Games & apps > Dusklight > View >
+  View details > App type = Game). In App mode d3d12.dll loads but the driver (umd12ddi.dll) crashes.
 #>
 param(
     [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
@@ -75,14 +82,6 @@ $surface = @'
 #elif defined(SDL_PLATFORM_WIN32)
 '@
 Patch-File 'extern/aurora/lib/dawn/BackendBinding.cpp' '(?m)^#elif defined\(SDL_PLATFORM_WIN32\)\r?$' ($surface -replace '\r?\n$', '') 1
-
-# --- aurora: lib/aurora.cpp --------------------------------------------------------------------
-# Xbox One S test (build 679165818): with BACKEND_AUTO Aurora tries BACKEND_D3D12 first and the app
-# dies with EXCEPTION_ACCESS_VIOLATION inside the console's user-mode driver (umd12ddi.dll, reached
-# through D3D12Core.dll from Dawn's D3D12 backend) during graphics init. UWP apps on Xbox are meant
-# to use D3D11 (feature level 10.1 on Xbox One), so drop D3D12 from PreferredBackendOrder. Auto then
-# resolves to D3D11, falling back to the Null backend (ImGui UI only) instead of crashing.
-Patch-File 'extern/aurora/lib/aurora.cpp' '(?m)^#ifdef DAWN_ENABLE_BACKEND_D3D12(?=\r?$)' '#if defined(DAWN_ENABLE_BACKEND_D3D12) && !defined(DUSK_XBOX_UWP) // DUSK_XBOX_UWP: D3D12 crashes in umd12ddi.dll on Xbox One S' 1
 
 # --- borealis: src/io.cpp ----------------------------------------------------------------------
 # CreateFileW is desktop-only; UWP provides CreateFile2. Shim it right after <Windows.h> so both
