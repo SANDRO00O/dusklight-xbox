@@ -19,7 +19,8 @@
   Dawn's D3D11 backend requests feature level 11.1/11.0 and D3D11CreateDevice returns
   DXGI_ERROR_UNSUPPORTED, because Xbox One only offers D3D11 feature level 10.1 to UWP apps and
   games. On Xbox One D3D12 (FL 11.0) exists only in Game mode. Instead of guessing, the game runs
-  platforms/xbox/xbox_gfx_probe.cpp before Aurora (hooked in below) and picks the backend from it.
+  platforms/xbox/xbox_gfx_probe.cpp (+ _deep.cpp) before Aurora (hooked in below) and picks the
+  backend from it.
 #>
 param(
     [ValidateSet('Source', 'Deps')][string]$Phase = 'Source',
@@ -142,8 +143,29 @@ static inline HANDLE CreateFileW(LPCWSTR name, DWORD access, DWORD share, LPSECU
 '@
 Patch-File 'extern/borealis/src/io.cpp' '(?m)^#include <Windows\.h>(?=\r?$)' $shim.TrimEnd() 1
 
+# --- borealis: src/log.cpp ---------------------------------------------------------------------
+# The log file is a stdio FILE that is only flushed for warnings and above. When the game dies with
+# an access violation inside the GPU driver the crash handler appends its report to the file, but all
+# earlier INFO lines are still in the stdio buffer and are lost, so the log shows nothing about how
+# far Aurora/Dawn got. Debug aid: on Xbox flush after every line.
+$logConst = @'
+using namespace std::literals::string_view_literals;
+
+// DUSK_XBOX_UWP: flush the log file after every line (see Apply-Patches.ps1).
+#ifdef DUSK_XBOX_UWP
+constexpr bool kDuskXboxFlushEveryLine = true;
+#else
+constexpr bool kDuskXboxFlushEveryLine = false;
+#endif
+'@
+$logEdits = @(
+    @{ Pattern = '(?m)^using namespace std::literals::string_view_literals;(?=\r?$)'; Replacement = $logConst.TrimEnd(); Expected = 1 },
+    @{ Pattern = 'message\.level >= state\.options\.flushOn'; Replacement = '(message.level >= state.options.flushOn || kDuskXboxFlushEveryLine)'; Expected = 3 }
+)
+Patch-FileMulti 'extern/borealis/src/log.cpp' $logEdits
+
 # --- game: src/m_Do/m_Do_main.cpp --------------------------------------------------------------
-# Run the SEH-guarded graphics probe (platforms/xbox/xbox_gfx_probe.cpp) right before Aurora creates
+# Run the SEH-guarded graphics probe (platforms/xbox/xbox_gfx_probe*.cpp) right before Aurora creates
 # the window and the GPU device. Result bits: 1 = D3D12 device creation works, 2 = D3D11 feature
 # level >= 11.0 works, 4 = probe could not run. With D3D12 usable (or the probe inconclusive) Aurora
 # keeps its normal Auto order (D3D12 first). D3D12 broken but D3D11 usable: force D3D11. Neither: log
@@ -152,8 +174,8 @@ Patch-File 'extern/borealis/src/io.cpp' '(?m)^#include <Windows\.h>(?=\r?$)' $sh
 $probe = @'
 #ifdef DUSK_XBOX_UWP
         {
-            int dusk_xbox_probe_graphics(const wchar_t* dir);
-            const int xboxGfx = dusk_xbox_probe_graphics(dusk::CachePath.c_str());
+            int dusk_xbox_probe_graphics_ex(const wchar_t* dir);
+            const int xboxGfx = dusk_xbox_probe_graphics_ex(dusk::CachePath.c_str());
             DuskLog.info("Xbox graphics probe result: {} (1=D3D12, 2=D3D11 FL11, 4=inconclusive), see gfx-probe.log", xboxGfx);
             if ((xboxGfx & 4) == 0 && (xboxGfx & 1) == 0) {
                 if ((xboxGfx & 2) != 0) {

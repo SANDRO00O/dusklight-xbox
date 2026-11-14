@@ -40,6 +40,7 @@ foreach ($p in @(
     'extern/aurora/lib/dawn/BackendBinding.cpp',
     'extern/aurora/lib/aurora.cpp',          # patched in build 789faead (D3D12 skip), patch since removed
     'extern/borealis/src/io.cpp',
+    'extern/borealis/src/log.cpp',           # flush the log file on every line
     'src/m_Do/m_Do_main.cpp'                 # graphics probe hook
 )) { [void]$alwaysFresh.Add($p) }
 
