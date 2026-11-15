@@ -164,9 +164,83 @@ $logEdits = @(
 )
 Patch-FileMulti 'extern/borealis/src/log.cpp' $logEdits
 
+# --- borealis: src/file_select/file_select.cpp -------------------------------------------------
+# FOUND ON HARDWARE (build 95be22cf): "Select Disc Image" did nothing on the console. borealis opens
+# files through SDL_ShowOpenFileDialog; the SDL3-uwp fork implements it with a minimal FileOpenPicker
+# run from a helper thread that swallows all errors. On UWP use our own picker
+# (platforms/xbox/xbox_file_picker.cpp: runs on the UI thread, logs to picker.log, copies the file into
+# the app's storage when the picked path cannot be opened directly). Folder selection and export are
+# not available on the console (capabilities say so, so the UI does not offer them).
+$pickDecl = @'
+extern "C" void dusk_xbox_pick_file(void (*done)(void*, const char*, const char*), void* userdata);
+
+namespace borealis::file_select {
+'@
+$pickOpen = @'
+    detail::open_ios_file(std::move(options), std::move(callback));
+#elif defined(DUSK_XBOX_UWP)
+    {
+        // DUSK_XBOX_UWP: own picker instead of SDL's (see Apply-Patches.ps1).
+        struct XboxPickState {
+            Callback callback;
+        };
+        auto* pickState = new XboxPickState{std::move(callback)};
+        dusk_xbox_pick_file(
+            [](void* userdata, const char* path, const char* error) {
+                std::unique_ptr<XboxPickState> state{static_cast<XboxPickState*>(userdata)};
+                Result result;
+                if (path != nullptr && path[0] != '\0') {
+                    result.status = Status::Selected;
+                    result.locations.emplace_back(path);
+                } else if (error != nullptr && error[0] != '\0') {
+                    result.status = Status::Failed;
+                    result.message = error;
+                } else {
+                    result.status = Status::Canceled;
+                }
+                detail::complete(std::move(state->callback), std::move(result));
+            },
+            pickState);
+    }
+#else
+'@
+$pickCaps = @'
+#if defined(DUSK_XBOX_UWP)
+    return {.canOpenFile = true, .canOpenFolder = false, .canExportFile = false};
+#else
+    return {.canOpenFile = true, .canOpenFolder = true, .canExportFile = true};
+#endif
+'@
+$fileSelectEdits = @(
+    @{ Pattern = '(?m)^namespace borealis::file_select \{(?=\r?$)'; Replacement = $pickDecl.TrimEnd(); Expected = 1 },
+    @{ Pattern = '(?m)^    return \{\.canOpenFile = true, \.canOpenFolder = true, \.canExportFile = true\};(?=\r?$)'; Replacement = $pickCaps.TrimEnd(); Expected = 1 },
+    @{ Pattern = '(?m)^    detail::open_ios_file\(std::move\(options\), std::move\(callback\)\);\r?\n#else(?=\r?$)'; Replacement = $pickOpen.TrimEnd(); Expected = 1 }
+)
+Patch-FileMulti 'extern/borealis/src/file_select/file_select.cpp' $fileSelectEdits
+
+# --- borealis: src/data.cpp --------------------------------------------------------------------
+# FOUND ON HARDWARE (build 95be22cf): "Open data folder" and "Change data folder" in the settings crash
+# the app. Opening a folder goes through SDL_OpenURL("file:///...") and changing it through the folder
+# dialog; neither exists on UWP. Report both as unsupported so the UI does not offer them (and a press
+# can never reach SDL).
+$dataEdits = @(
+    @{
+        Pattern = '(?m)^    environment\.canOpenFolder = true;(?=\r?$)'
+        Replacement = "#if !defined(DUSK_XBOX_UWP)`n    environment.canOpenFolder = true;`n#endif"
+        Expected = 1
+    },
+    @{
+        Pattern = '(?m)^    environment\.canChangeLocation = !environment\.isIOS;(?=\r?$)'
+        Replacement = "    environment.canChangeLocation = !environment.isIOS;`n#if defined(DUSK_XBOX_UWP)`n    environment.canChangeLocation = false;`n#endif"
+        Expected = 1
+    }
+)
+Patch-FileMulti 'extern/borealis/src/data.cpp' $dataEdits
+
 # --- game: src/m_Do/m_Do_main.cpp --------------------------------------------------------------
-# 1) Start the controller diagnostics (platforms/xbox/xbox_input_diag.cpp -> input-diag.log) before
-#    Aurora initialises SDL, so SDL's own start-up messages are captured.
+# 1) Start the controller support/diagnostics (platforms/xbox/xbox_input_diag.cpp: enables SDL's WGI
+#    joystick driver, writes input-diag.log) before Aurora initialises SDL, so SDL's own start-up
+#    messages are captured.
 # 2) Run the SEH-guarded graphics probe (platforms/xbox/xbox_gfx_probe*.cpp) right before Aurora creates
 #    the window and the GPU device. Result bits: 1 = D3D12 device creation works, 2 = D3D11 feature
 #    level >= 11.0 works, 4 = probe could not run. With D3D12 usable (or the probe inconclusive) Aurora
