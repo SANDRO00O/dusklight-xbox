@@ -165,15 +165,19 @@ $logEdits = @(
 Patch-FileMulti 'extern/borealis/src/log.cpp' $logEdits
 
 # --- game: src/m_Do/m_Do_main.cpp --------------------------------------------------------------
-# Run the SEH-guarded graphics probe (platforms/xbox/xbox_gfx_probe*.cpp) right before Aurora creates
-# the window and the GPU device. Result bits: 1 = D3D12 device creation works, 2 = D3D11 feature
-# level >= 11.0 works, 4 = probe could not run. With D3D12 usable (or the probe inconclusive) Aurora
-# keeps its normal Auto order (D3D12 first). D3D12 broken but D3D11 usable: force D3D11. Neither: log
-# and exit instead of letting Aurora walk into the crashing D3D12 backend. Results are in
-# gfx-probe.log next to the game log.
+# 1) Start the controller diagnostics (platforms/xbox/xbox_input_diag.cpp -> input-diag.log) before
+#    Aurora initialises SDL, so SDL's own start-up messages are captured.
+# 2) Run the SEH-guarded graphics probe (platforms/xbox/xbox_gfx_probe*.cpp) right before Aurora creates
+#    the window and the GPU device. Result bits: 1 = D3D12 device creation works, 2 = D3D11 feature
+#    level >= 11.0 works, 4 = probe could not run. With D3D12 usable (or the probe inconclusive) Aurora
+#    keeps its normal Auto order (D3D12 first). D3D12 broken but D3D11 usable: force D3D11. Neither: log
+#    and exit instead of letting Aurora walk into the crashing D3D12 backend. Results are in
+#    gfx-probe.log next to the game log.
 $probe = @'
 #ifdef DUSK_XBOX_UWP
         {
+            void dusk_xbox_input_diag_start(const wchar_t* dir);
+            dusk_xbox_input_diag_start(dusk::CachePath.c_str());
             int dusk_xbox_probe_graphics_ex(const wchar_t* dir);
             const int xboxGfx = dusk_xbox_probe_graphics_ex(dusk::CachePath.c_str());
             DuskLog.info("Xbox graphics probe result: {} (1=D3D12, 2=D3D11 FL11, 4=inconclusive), see gfx-probe.log", xboxGfx);
