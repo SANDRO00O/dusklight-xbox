@@ -41,6 +41,8 @@ foreach ($p in @(
     'extern/aurora/lib/aurora.cpp',          # patched in build 789faead (D3D12 skip), patch since removed
     'extern/borealis/src/io.cpp',
     'extern/borealis/src/log.cpp',           # flush the log file on every line
+    'extern/borealis/src/file_select/file_select.cpp', # own UWP file picker
+    'extern/borealis/src/data.cpp',          # no open/change data folder on UWP
     'src/m_Do/m_Do_main.cpp'                 # graphics probe hook
 )) { [void]$alwaysFresh.Add($p) }
 

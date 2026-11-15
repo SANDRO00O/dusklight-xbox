@@ -60,15 +60,19 @@ endfunction()
 #   UWP (see the file).
 # * xbox_gfx_probe.cpp, xbox_gfx_probe_deep.cpp: SEH-guarded D3D11/D3D12 probe run before Aurora
 #   initialises (see the files and the m_Do_main.cpp patch in Apply-Patches.ps1).
-# * xbox_input_diag.cpp: controller diagnostics (input-diag.log), same hook.
+# * xbox_input_diag.cpp: enables SDL's WGI joystick driver + controller diagnostics (input-diag.log),
+#   same hook.
+# * xbox_file_picker.cpp: FileOpenPicker for the disc image, called from borealis' file_select.cpp
+#   (patched in Apply-Patches.ps1).
 function(_dusk_xbox_link_stubs)
   if(TARGET dusklight)
     target_sources(dusklight PRIVATE
       "${CMAKE_SOURCE_DIR}/platforms/xbox/abseil_uwp_stubs.cpp"
       "${CMAKE_SOURCE_DIR}/platforms/xbox/xbox_gfx_probe.cpp"
       "${CMAKE_SOURCE_DIR}/platforms/xbox/xbox_gfx_probe_deep.cpp"
-      "${CMAKE_SOURCE_DIR}/platforms/xbox/xbox_input_diag.cpp")
-    message(STATUS "xbox: added abseil_uwp_stubs.cpp, xbox_gfx_probe*.cpp and xbox_input_diag.cpp to dusklight")
+      "${CMAKE_SOURCE_DIR}/platforms/xbox/xbox_input_diag.cpp"
+      "${CMAKE_SOURCE_DIR}/platforms/xbox/xbox_file_picker.cpp")
+    message(STATUS "xbox: added abseil_uwp_stubs.cpp, xbox_gfx_probe*.cpp, xbox_input_diag.cpp and xbox_file_picker.cpp to dusklight")
   endif()
 endfunction()
 
