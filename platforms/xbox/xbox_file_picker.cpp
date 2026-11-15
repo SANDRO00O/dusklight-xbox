@@ -200,11 +200,12 @@ void LoadPersisted() {
         RunMta([] {
             try {
                 auto list = wsa::StorageApplicationPermissions::FutureAccessList();
+                // AccessListEntry is a struct with the fields Token and Metadata (not methods).
                 for (auto const& entry : list.Entries()) {
-                    if (entry.Token() == L"disc") {
+                    if (entry.Token == L"disc") {
                         std::lock_guard<std::mutex> lock(g_stateMutex);
                         if (g_knownPath.empty()) {
-                            g_knownPath = winrt::to_string(entry.Metadata());
+                            g_knownPath = winrt::to_string(entry.Metadata);
                         }
                         break;
                     }
