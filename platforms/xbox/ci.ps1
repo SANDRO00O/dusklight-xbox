@@ -109,6 +109,17 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
+# --- Patch the AppX manifest CMake generated (capabilities for reading the disc image from USB) ---
+# Not fatal if it fails (the build still works, only USB access would be missing), but loud.
+$manifestOk = $true
+try {
+    ./platforms/xbox/Patch-Manifest.ps1 -BuildDir $buildDir 2>&1 | Tee-Object -FilePath manifest.log
+} catch {
+    $manifestOk = $false
+    Write-Host "::warning::Patch-Manifest.ps1 failed: $_"
+    "$_" | Out-File -FilePath manifest.log -Append
+}
+
 # --- Build ---
 # MSBuild keeps going past a failing project, so one run reports every independent error.
 $sw.Restart()
@@ -126,6 +137,21 @@ Write-Host 'Build succeeded'
 
 $assetsDir = Join-Path $buildDir 'Assets'
 New-Item -ItemType Directory -Force -Path $assetsDir | Out-Null
+
+# --- Which manifest ended up in the package? (copied into the logs artifact for inspection) ---
+$manifestCopies = Join-Path $assetsDir 'manifests'
+New-Item -ItemType Directory -Force -Path $manifestCopies | Out-Null
+$i = 0
+Get-ChildItem -Path $buildDir -Recurse -File -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -ieq 'AppxManifest.xml' -or $_.Name -ieq 'Package.appxmanifest' } |
+    Where-Object { $_.FullName -notmatch '[\\/](_deps|ext)[\\/]' } |
+    ForEach-Object {
+        $i++
+        Copy-Item $_.FullName (Join-Path $manifestCopies ("{0}-{1}" -f $i, $_.Name)) -Force
+        $hasCap = (Get-Content -Raw $_.FullName) -match 'broadFileSystemAccess'
+        Write-Host ("manifest: {0} (has broadFileSystemAccess: {1})" -f $_.FullName, $hasCap)
+        if (-not $hasCap) { Write-Host "::warning::$($_.FullName) does not contain the patched capabilities" }
+    }
 
 # --- Imports of the produced exe (written to Assets/imports.log) ---
 # The Rust crate `nod` is built for the desktop target and asks for kernel32;ntdll;userenv;ws2_32;dbghelp.

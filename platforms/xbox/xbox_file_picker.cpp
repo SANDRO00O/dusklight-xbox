@@ -6,8 +6,11 @@
 // is called from borealis' file_select.cpp (patched in Apply-Patches.ps1) instead of SDL.
 //
 // Flow: run the picker on the CoreWindow's UI thread -> get the StorageFile -> if CreateFile2 can open
-// its path, return that path; otherwise copy the file into <LocalState>\discs\ and return the copy's
-// path (the broker only grants access through the StorageFile object on some locations).
+// its path, return that path. That needs the manifest capabilities added by Patch-Manifest.ps1
+// (removableStorage + file type associations for the disc extensions): without them a file on a USB
+// drive is access-denied (win32 error 5). Otherwise, for SMALL files only, copy the file into
+// <LocalState>\discs\ and return the copy's path. A disc image is 1+ GB and copying it fails with
+// "The disk is full" (app storage quota), so large files get a clear error instead.
 // Every step is logged to <LocalState>\TwilitRealm\Dusklight\picker.log.
 //
 //   void dusk_xbox_pick_file(void (*done)(void* userdata, const char* utf8Path, const char* error),
@@ -38,6 +41,8 @@ namespace ws = winrt::Windows::Storage;
 namespace wp = winrt::Windows::Storage::Pickers;
 
 using DoneFn = void (*)(void*, const char*, const char*);
+
+constexpr uint64_t kMaxCopyBytes = 256ull * 1024 * 1024;
 
 std::mutex g_logMutex;
 
@@ -86,10 +91,24 @@ bool CanOpen(const wchar_t* path, DWORD* error) {
     return true;
 }
 
-void CopyIntoLocalState(DoneFn done, void* userdata, ws::StorageFile file) {
-    std::thread([done, userdata, file]() {
+void CopyIntoLocalState(DoneFn done, void* userdata, ws::StorageFile file, DWORD openError) {
+    std::thread([done, userdata, file, openError]() {
         try {
             winrt::init_apartment(winrt::apartment_type::multi_threaded);
+            uint64_t size = 0;
+            try {
+                size = file.GetBasicPropertiesAsync().get().Size();
+            } catch (...) {
+                Log("could not read the file size");
+            }
+            Log("file size %llu bytes", static_cast<unsigned long long>(size));
+            if (size == 0 || size > kMaxCopyBytes) {
+                Finish(done, userdata, "",
+                       "The game cannot read this file in place (Windows error " + std::to_string(openError) +
+                           "; the app lacks access to this location) and it is too large to copy into the "
+                           "app's storage.");
+                return;
+            }
             auto folder = ws::ApplicationData::Current()
                               .LocalFolder()
                               .CreateFolderAsync(L"discs", ws::CreationCollisionOption::OpenIfExists)
@@ -121,8 +140,8 @@ void HandlePicked(DoneFn done, void* userdata, ws::StorageFile file) {
             Finish(done, userdata, path, "");
             return;
         }
-        Log("path not directly readable (win32 error %lu), copying into app storage", error);
-        CopyIntoLocalState(done, userdata, file);
+        Log("path not directly readable (win32 error %lu)", error);
+        CopyIntoLocalState(done, userdata, file, error);
     } catch (winrt::hresult_error const& e) {
         Finish(done, userdata, "", "Handling the selected file failed: " + winrt::to_string(e.message()));
     } catch (...) {
