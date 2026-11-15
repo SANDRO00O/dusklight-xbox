@@ -1,0 +1,124 @@
+<#
+.SYNOPSIS
+  Source patches that let the game read the disc image from a USB drive on the Xbox (UWP).
+  Run by ci.ps1 right after `Apply-Patches.ps1 -Phase Source`.
+
+  FOUND ON HARDWARE (builds 97e2887f, deb17009): the FileOpenPicker returns 'E:\...\game.iso' for a file
+  on a USB drive, but opening that path fails with ERROR_ACCESS_DENIED. The app only has access through
+  the StorageFile, so platforms/xbox/xbox_file_picker.cpp turns it into a HANDLE and exposes
+    SDL_IOStream* dusk_xbox_open_disc_stream(const char* utf8Path)   (nullptr = not such a file)
+    bool           dusk_xbox_is_picked_path(const char* utf8Path)
+  The disc is opened in two places, both through SDL_IOFromFile, and both get the hook here:
+    * extern/aurora/lib/dolphin/dvd/dvd.cpp  aurora_dvd_open()  (the game reads the disc through this)
+    * extern/borealis/src/io.cpp             io::open()         (disc verification / inspection)
+  plus io.cpp's filesystem_check(), which uses std::filesystem::exists (also access denied) and made
+  io::check report the picked file as missing.
+
+  Separate from Apply-Patches.ps1 because that script treats any file containing DUSK_XBOX_UWP as
+  already patched (io.cpp already has the CreateFileW shim). This one uses its own marker.
+  Idempotent; exits 1 when an anchor does not match exactly as often as expected.
+
+  Every file patched here must be listed in $alwaysFresh of Cache-Mtimes.ps1.
+#>
+param(
+    [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
+)
+
+$ErrorActionPreference = 'Stop'
+$script:failed = $false
+$utf8 = New-Object System.Text.UTF8Encoding($false)
+$marker = 'dusk_xbox_open_disc_stream'
+
+function Patch-Disc([string]$Rel, [object[]]$Edits) {
+    $path = Join-Path $RepoRoot $Rel
+    if (-not (Test-Path $path)) {
+        Write-Host "::error::patch target missing: $Rel (is the submodule checked out?)"
+        $script:failed = $true
+        return
+    }
+    $text = [System.IO.File]::ReadAllText($path)
+    if ($text.Contains($marker)) {
+        Write-Host "already patched: $Rel"
+        return
+    }
+    foreach ($e in $Edits) {
+        $count = [regex]::Matches($text, $e.Pattern).Count
+        if ($count -ne $e.Expected) {
+            Write-Host "::error::patch anchor '$($e.Pattern)' in $Rel matched $count time(s), expected $($e.Expected) (upstream changed?)"
+            $script:failed = $true
+            return
+        }
+    }
+    foreach ($e in $Edits) {
+        $text = [regex]::Replace($text, $e.Pattern, $e.Replacement)
+    }
+    [System.IO.File]::WriteAllText($path, $text, $utf8)
+    Write-Host "patched: $Rel ($($Edits.Count) edit(s))"
+}
+
+# --- aurora: lib/dolphin/dvd/dvd.cpp -----------------------------------------------------------
+$dvdDecl = @'
+using namespace aurora::dvd::impl;
+
+#ifdef DUSK_XBOX_UWP
+// dusk_xbox_open_disc_stream: platforms/xbox/xbox_file_picker.cpp (see Apply-Patches-Disc.ps1).
+extern "C" SDL_IOStream* dusk_xbox_open_disc_stream(const char* utf8Path);
+#endif
+'@
+$dvdOpen = @'
+#ifdef DUSK_XBOX_UWP
+  // The picked disc on a USB drive is only reachable through its StorageFile.
+  SDL_IOStream* io = dusk_xbox_open_disc_stream(disc_path);
+  if (io == nullptr) {
+    io = SDL_IOFromFile(disc_path, "rb");
+  }
+#else
+  SDL_IOStream* io = SDL_IOFromFile(disc_path, "rb");
+#endif
+'@
+$dvdEdits = @(
+    @{ Pattern = '(?m)^using namespace aurora::dvd::impl;(?=\r?$)'; Replacement = $dvdDecl.TrimEnd(); Expected = 1 },
+    @{ Pattern = '(?m)^  SDL_IOStream\* io = SDL_IOFromFile\(disc_path, "rb"\);(?=\r?$)'; Replacement = $dvdOpen.TrimEnd(); Expected = 1 }
+)
+Patch-Disc 'extern/aurora/lib/dolphin/dvd/dvd.cpp' $dvdEdits
+
+# --- borealis: src/io.cpp ----------------------------------------------------------------------
+$ioDecl = @'
+#ifdef DUSK_XBOX_UWP
+// platforms/xbox/xbox_file_picker.cpp (see Apply-Patches-Disc.ps1). dusk_xbox_open_disc_stream returns
+// nullptr for every file that is not the picked disc, so callers fall back to SDL_IOFromFile.
+extern "C" SDL_IOStream* dusk_xbox_open_disc_stream(const char* utf8Path);
+extern "C" bool dusk_xbox_is_picked_path(const char* utf8Path);
+#endif
+
+namespace borealis::io {
+'@
+$ioOpen = @'
+#ifdef DUSK_XBOX_UWP
+    SDL_IOStream* handle =
+        mode == File::Mode::Read ? dusk_xbox_open_disc_stream(resolved.c_str()) : nullptr;
+    if (handle == nullptr) {
+        handle = SDL_IOFromFile(resolved.c_str(), openMode);
+    }
+#else
+    SDL_IOStream* handle = SDL_IOFromFile(resolved.c_str(), openMode);
+#endif
+'@
+$ioExists = @'
+    bool exists = std::filesystem::exists(fs_path_from_utf8(location), error);
+#ifdef DUSK_XBOX_UWP
+    if (!exists && dusk_xbox_is_picked_path(std::string{location}.c_str())) {
+        error.clear();
+        exists = true;
+    }
+#endif
+'@
+$ioEdits = @(
+    @{ Pattern = '(?m)^namespace borealis::io \{(?=\r?$)'; Replacement = $ioDecl.TrimEnd(); Expected = 1 },
+    @{ Pattern = '(?m)^    SDL_IOStream\* handle = SDL_IOFromFile\(resolved\.c_str\(\), openMode\);(?=\r?$)'; Replacement = $ioOpen.TrimEnd(); Expected = 1 },
+    @{ Pattern = '(?m)^    const bool exists = std::filesystem::exists\(fs_path_from_utf8\(location\), error\);(?=\r?$)'; Replacement = $ioExists.TrimEnd(); Expected = 1 }
+)
+Patch-Disc 'extern/borealis/src/io.cpp' $ioEdits
+
+if ($script:failed) { exit 1 }
+exit 0
