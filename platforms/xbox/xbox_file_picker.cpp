@@ -24,11 +24,13 @@
 #include <winrt/Windows.ApplicationModel.Core.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Storage.FileProperties.h>
 #include <winrt/Windows.Storage.Pickers.h>
 #include <winrt/Windows.Storage.h>
 #include <winrt/Windows.UI.Core.h>
 
 #include <cstdarg>
+#include <cstdint>
 #include <cstdio>
 #include <mutex>
 #include <string>
