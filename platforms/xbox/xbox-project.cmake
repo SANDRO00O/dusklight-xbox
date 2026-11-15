@@ -70,6 +70,34 @@ function(_dusk_xbox_link_stubs)
   endif()
 endfunction()
 
+# --- res/ into the MSIX package -----------------------------------------------------------------
+# The game loads fonts, RmlUi stylesheets, images and more from <exe dir>/res. The top-level
+# CMakeLists copies res/ next to the exe after linking, but a UWP package only contains files that
+# are marked as deployment content in the Visual Studio project, so the installed app had no res/
+# (log: "Failed to open file ...\\res\\FiraSans-Regular.ttf"). Add every file under res/ as content,
+# deployed to the same relative directory inside the package.
+function(_dusk_xbox_package_resources)
+  if(NOT TARGET dusklight)
+    return()
+  endif()
+  file(GLOB_RECURSE _res_files CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/res/*")
+  set(_count 0)
+  foreach(_f IN LISTS _res_files)
+    if(IS_DIRECTORY "${_f}")
+      continue()
+    endif()
+    file(RELATIVE_PATH _rel "${CMAKE_SOURCE_DIR}" "${_f}")
+    get_filename_component(_dir "${_rel}" DIRECTORY)
+    target_sources(dusklight PRIVATE "${_f}")
+    set_source_files_properties("${_f}" PROPERTIES
+      VS_DEPLOYMENT_CONTENT 1
+      VS_DEPLOYMENT_LOCATION "${_dir}")
+    math(EXPR _count "${_count}+1")
+  endforeach()
+  message(STATUS "xbox: ${_count} file(s) under res/ marked as package content")
+endfunction()
+
 cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL _dusk_xbox_sdl_cxx17)
 cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL _dusk_xbox_freetype_system)
 cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL _dusk_xbox_link_stubs)
+cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL _dusk_xbox_package_resources)

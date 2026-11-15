@@ -205,6 +205,7 @@ if ($Phase -eq 'Deps') {
 # result only sets a capability flag that defaults to false), so route them all through a helper
 # that runs the call under SEH and treats an exception as "not supported". 16 call sites: 14 in
 # GatherDeviceInfo plus 2 in the Agility-SDK-only linear algebra helper.
+# (Later logs showed these queries are harmless on the console; kept as a cheap safety net.)
 $safeHelper = @'
 namespace dawn::native::d3d12 {
 
@@ -225,6 +226,24 @@ $edits = @(
     @{ Pattern = 'd3d12Device->CheckFeatureSupport\('; Replacement = 'DuskSafeCheckFeatureSupport(d3d12Device.Get(), '; Expected = 16 }
 )
 Patch-FileMulti "$BuildDir/_deps/dawn-src/src/dawn/native/d3d12/D3D12Info.cpp" $edits
+
+# --- Dawn: RenderPipelineD3D12.cpp, ComputePipelineD3D12.cpp ------------------------------------
+# FOUND ON HARDWARE (build 0d1e37aa, log + gfx-probe.log): after CreateGraphicsPipelineState succeeds,
+# Dawn calls ID3D12PipelineState::GetCachedBlob() to store the compiled pipeline in Aurora's SQLite
+# cache. On the Xbox One S that call faults inside umd12ddi.dll (rva 0x73500; an unhandled access
+# violation in the earlier builds, DXGI_ERROR_DEVICE_REMOVED / DRIVER_INTERNAL_ERROR once the runtime
+# catches it). Everything else the probe tried works. The cache is only an optimisation, so on Xbox
+# never ask the driver for the blob: the `if (!cacheHit) {` block (cache miss: get blob + store) is
+# disabled. LoadCachedBlob still finds nothing, so every pipeline is simply compiled normally.
+$noBlob = @(
+    @{
+        Pattern = '(?m)^    if \(!cacheHit\) \{(?=\r?\n[ \t]*// Cache misses, need to get pipeline cached blob and store\.)'
+        Replacement = "    // DUSK_XBOX_UWP: GetCachedBlob crashes the Xbox One S D3D12 driver, never call it.`n    const bool duskStoreCachedBlob = false;`n    if (!cacheHit && duskStoreCachedBlob) {"
+        Expected = 1
+    }
+)
+Patch-FileMulti "$BuildDir/_deps/dawn-src/src/dawn/native/d3d12/RenderPipelineD3D12.cpp" $noBlob
+Patch-FileMulti "$BuildDir/_deps/dawn-src/src/dawn/native/d3d12/ComputePipelineD3D12.cpp" $noBlob
 
 }
 
