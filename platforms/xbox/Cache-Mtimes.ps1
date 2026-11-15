@@ -17,9 +17,10 @@
 
   Run Restore before Apply-Patches.ps1 (patched files get a new mtime and are rebuilt every run).
 
-  RULE: every file Apply-Patches.ps1 has ever patched must stay in $alwaysFresh, even after the
-  patch is removed. The cached object was compiled from the PATCHED text; once the patch is gone the
-  file is clean in git, would get the old mtime, and the stale object would be linked.
+  RULE: every file Apply-Patches.ps1 / Apply-Patches-Disc.ps1 has ever patched must stay in
+  $alwaysFresh, even after the patch is removed. The cached object was compiled from the PATCHED text;
+  once the patch is gone the file is clean in git, would get the old mtime, and the stale object would
+  be linked.
 #>
 param(
     [Parameter(Mandatory)][ValidateSet('Restore', 'Save')][string]$Mode,
@@ -39,7 +40,8 @@ foreach ($p in @(
     'extern/aurora/cmake/AuroraCopyRuntimeDLLs.cmake',
     'extern/aurora/lib/dawn/BackendBinding.cpp',
     'extern/aurora/lib/aurora.cpp',          # patched in build 789faead (D3D12 skip), patch since removed
-    'extern/borealis/src/io.cpp',
+    'extern/aurora/lib/dolphin/dvd/dvd.cpp', # read the picked disc through its StorageFile handle
+    'extern/borealis/src/io.cpp',            # CreateFileW shim + the same disc hook
     'extern/borealis/src/log.cpp',           # flush the log file on every line
     'extern/borealis/src/file_select/file_select.cpp', # own UWP file picker
     'extern/borealis/src/data.cpp',          # no open/change data folder on UWP

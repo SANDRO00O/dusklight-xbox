@@ -86,6 +86,13 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
+# --- Disc access hooks (aurora dvd.cpp, borealis io.cpp): read the picked ISO through its StorageFile ---
+./platforms/xbox/Apply-Patches-Disc.ps1 2>&1 | Tee-Object -FilePath patches.log -Append
+if ($LASTEXITCODE -ne 0) {
+    Write-Host '################ DISC PATCHING FAILED: an anchor in aurora/borealis did not match (see patches.log) ################'
+    exit 1
+}
+
 # --- Configure ---
 # No -G: CMake picks the newest installed Visual Studio generator (required for WindowsStore).
 # The -D arguments are quoted so PowerShell does not split them at dots.
