@@ -1,8 +1,11 @@
-// Xbox One (UWP) controller diagnostics. Part of the Xbox port, see docs/xbox-port.md.
+// Xbox One (UWP) controller support fix + diagnostics. Part of the Xbox port, see docs/xbox-port.md.
 //
-// Symptom (build 37658fae): the game UI renders but the overlay says "No Device Assigned" for port 1
-// and the log has no "Added controller" line, i.e. SDL never reported a gamepad. This file writes
-// <CachePath>/input-diag.log with:
+// FIX: the SDL3-uwp fork ships with SDL_HINT_JOYSTICK_WGI disabled by default, and its Windows.Gaming.Input
+// driver is the only physical-controller driver in the UWP build, so SDL saw 0 joysticks while Windows
+// itself reported "Xbox One Game Controller" (input-diag.log of build 31c69b90). The hint is set in
+// dusk_xbox_input_diag_start() before Aurora initialises SDL.
+//
+// DIAGNOSTICS: writes <CachePath>/input-diag.log with:
 //   * everything SDL logs (log output redirected, input category at verbose) from before Aurora starts,
 //   * every 1.5 s (on change, and every ~30 s regardless): which SDL subsystems are up, the joystick and
 //     gamepad lists SDL sees (name, vid/pid, GUID, is-gamepad, mapping),
@@ -222,7 +225,16 @@ void Worker() {
 } // namespace
 
 void dusk_xbox_input_diag_start(const wchar_t* dir) {
-    if (g_started.exchange(true) || dir == nullptr) {
+    if (g_started.exchange(true)) {
+        return;
+    }
+    // THE FIX (found with input-diag.log, build 31c69b90): the SDL3-uwp fork ships with
+    // SDL_HINT_JOYSTICK_WGI disabled by default (its WhatsNew.txt: "SDL_HINT_JOYSTICK_WGI is disabled by
+    // default", and SDL_WGI_JoystickInit does `if (!SDL_GetHintBoolean(SDL_HINT_JOYSTICK_WGI, false)) return`).
+    // WGI is the only physical-controller driver in the UWP build, so without this SDL never sees a pad
+    // even though Windows.Gaming.Input reports "Xbox One Game Controller". Must be set before SDL_Init.
+    SDL_SetHint("SDL_JOYSTICK_WGI", "1");
+    if (dir == nullptr) {
         return;
     }
     std::wstring path = dir;
