@@ -93,6 +93,17 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
+# --- Symbol table placeholder + stale linker map ---
+# xbox-project.cmake packages <build>/dusklight.sym as symbols/dusklight.sym (function names for the stack
+# traces in crash-diag.log). It always starts as a placeholder so a table of an older build can never be
+# packaged; the real one is generated from the linker map after the first build (see below). The map is
+# removed so the link step runs again and writes a map that matches this build's exe.
+New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
+$symFile = Join-Path $buildDir 'dusklight.sym'
+$mapFile = Join-Path $buildDir 'dusklight.map'
+'no symbols in this build' | Out-File -FilePath $symFile -Encoding ascii
+Remove-Item -Force $mapFile -ErrorAction SilentlyContinue
+
 # --- Configure ---
 # No -G: CMake picks the newest installed Visual Studio generator (required for WindowsStore).
 # The -D arguments are quoted so PowerShell does not split them at dots.
@@ -138,6 +149,57 @@ if ($buildExit -ne 0) {
     exit $buildExit
 }
 Write-Host 'Build succeeded'
+
+# --- Symbol table for crash / hang stack traces, then repackage ---
+# Everything in this block is best effort: when it fails the first package (placeholder symbol table) stays.
+try {
+    if (Test-Path $mapFile) {
+        ./platforms/xbox/Make-Symbols.ps1 -MapFile $mapFile -OutFile $symFile 2>&1 | Tee-Object -FilePath symbols.log
+        $symSize = (Get-Item $symFile).Length
+        Write-Host ('symbol table: {0:N0} bytes' -f $symSize)
+        $pkgDir = Join-Path $buildDir 'AppPackages'
+        $pkgBak = Join-Path $buildDir 'AppPackages.nosyms'
+        if (($symSize -gt 4096) -and (Test-Path $pkgDir)) {
+            Remove-Item -Recurse -Force $pkgBak -ErrorAction SilentlyContinue
+            Move-Item -Path $pkgDir -Destination $pkgBak
+            $sw.Restart()
+            cmake --build $buildDir --config $config --target dusklight 2>&1 | Tee-Object -FilePath build-symbols.log | Out-Null
+            $repackExit = $LASTEXITCODE
+            Write-Host ('Repackaging build took {0:N0}s (exit code {1})' -f $sw.Elapsed.TotalSeconds, $repackExit)
+            if (($repackExit -ne 0) -or (-not (Test-Path $pkgDir))) {
+                Write-Host '::warning::repackaging with the symbol table failed, keeping the package without symbols'
+                Remove-Item -Recurse -Force $pkgDir -ErrorAction SilentlyContinue
+                Move-Item -Path $pkgBak -Destination $pkgDir
+            } else {
+                Remove-Item -Recurse -Force $pkgBak -ErrorAction SilentlyContinue
+                # Is the table really inside the package?
+                Add-Type -AssemblyName System.IO.Compression.FileSystem
+                Get-ChildItem -Path $pkgDir -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in '.msix', '.appx' } | ForEach-Object {
+                    $zip = [System.IO.Compression.ZipFile]::OpenRead($_.FullName)
+                    try {
+                        $entry = $zip.Entries | Where-Object { $_.FullName -match 'symbols[/\\]dusklight\.sym$' } | Select-Object -First 1
+                        if ($entry) {
+                            Write-Host ('{0}: symbols/dusklight.sym = {1:N0} bytes' -f $_.Name, $entry.Length)
+                            if ($entry.Length -lt 4096) { Write-Host "::warning::$($_.Name) still has the placeholder symbol table" }
+                        } else {
+                            Write-Host "::warning::$($_.Name) does not contain symbols/dusklight.sym"
+                        }
+                    } finally {
+                        $zip.Dispose()
+                    }
+                }
+            }
+        } else {
+            Write-Host '::warning::no usable symbol table or no package, skipping the repackaging build'
+        }
+        # The map is large; keep it out of the build cache.
+        Remove-Item -Force $mapFile -ErrorAction SilentlyContinue
+    } else {
+        Write-Host "::warning::$mapFile was not produced, the package has no symbol table"
+    }
+} catch {
+    Write-Host "::warning::symbol table step failed: $_"
+}
 
 # Record the commits this build corresponds to (only after a successful build, see Cache-Mtimes.ps1).
 ./platforms/xbox/Cache-Mtimes.ps1 -Mode Save
