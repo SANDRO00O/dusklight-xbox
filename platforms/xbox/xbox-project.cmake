@@ -62,6 +62,8 @@ endfunction()
 #   initialises (see the files and the m_Do_main.cpp patch in Apply-Patches.ps1).
 # * xbox_input_diag.cpp: enables SDL's WGI joystick driver + controller diagnostics (input-diag.log),
 #   same hook.
+# * xbox_crash_diag.cpp: crash / hang diagnostics (crash-diag.log), started from xbox_input_diag.cpp.
+#   The linker writes a map (/MAP) that ci.ps1 turns into symbols/dusklight.sym (see below).
 # * xbox_file_picker.cpp: FileOpenPicker for the disc image, called from borealis' file_select.cpp
 #   (patched in Apply-Patches.ps1).
 function(_dusk_xbox_link_stubs)
@@ -71,8 +73,10 @@ function(_dusk_xbox_link_stubs)
       "${CMAKE_SOURCE_DIR}/platforms/xbox/xbox_gfx_probe.cpp"
       "${CMAKE_SOURCE_DIR}/platforms/xbox/xbox_gfx_probe_deep.cpp"
       "${CMAKE_SOURCE_DIR}/platforms/xbox/xbox_input_diag.cpp"
+      "${CMAKE_SOURCE_DIR}/platforms/xbox/xbox_crash_diag.cpp"
       "${CMAKE_SOURCE_DIR}/platforms/xbox/xbox_file_picker.cpp")
-    message(STATUS "xbox: added abseil_uwp_stubs.cpp, xbox_gfx_probe*.cpp, xbox_input_diag.cpp and xbox_file_picker.cpp to dusklight")
+    target_link_options(dusklight PRIVATE "/MAP:${CMAKE_BINARY_DIR}/dusklight.map")
+    message(STATUS "xbox: added abseil_uwp_stubs.cpp, xbox_gfx_probe*.cpp, xbox_input_diag.cpp, xbox_crash_diag.cpp and xbox_file_picker.cpp to dusklight; linker map -> ${CMAKE_BINARY_DIR}/dusklight.map")
   endif()
 endfunction()
 
@@ -82,6 +86,10 @@ endfunction()
 # are marked as deployment content in the Visual Studio project, so the installed app had no res/
 # (log: "Failed to open file ...\\res\\FiraSans-Regular.ttf"). Add every file under res/ as content,
 # deployed to the same relative directory inside the package.
+#
+# Also packaged: <build>/dusklight.sym -> symbols/dusklight.sym, the function table used by
+# xbox_crash_diag.cpp. ci.ps1 writes a placeholder before configuring, then replaces it with the real
+# table (generated from the linker map by Make-Symbols.ps1) and builds again to repackage it.
 function(_dusk_xbox_package_resources)
   if(NOT TARGET dusklight)
     return()
@@ -101,6 +109,17 @@ function(_dusk_xbox_package_resources)
     math(EXPR _count "${_count}+1")
   endforeach()
   message(STATUS "xbox: ${_count} file(s) under res/ marked as package content")
+
+  set(_sym "${CMAKE_BINARY_DIR}/dusklight.sym")
+  if(NOT EXISTS "${_sym}")
+    file(WRITE "${_sym}" "no symbols in this build\n")
+  endif()
+  target_sources(dusklight PRIVATE "${_sym}")
+  set_source_files_properties("${_sym}" PROPERTIES
+    GENERATED TRUE
+    VS_DEPLOYMENT_CONTENT 1
+    VS_DEPLOYMENT_LOCATION "symbols")
+  message(STATUS "xbox: ${_sym} marked as package content (symbols/)")
 endfunction()
 
 cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL _dusk_xbox_sdl_cxx17)

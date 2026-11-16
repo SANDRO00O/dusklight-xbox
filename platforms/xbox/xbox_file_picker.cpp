@@ -23,6 +23,12 @@
 // IID below was wrong (the correct one is 5CA296B2-2C25-4D22-B785-B885C8201E6A, see
 // https://learn.microsoft.com/windows/win32/api/windowsstoragecom/nn-windowsstoragecom-istorageitemhandleaccess).
 //
+// Build 7c59522e: the disc opens and verifies, the game starts and then hangs after two frames. The stream
+// is therefore hardened and instrumented: nod's preloader thread and Aurora's DVD worker thread both do
+// seek + read on the same stream, so the position is kept per thread (a shared position let one thread's
+// seek land in the other thread's read), and the first reads, slow/failed reads, and the stream's close are
+// logged. dusk_xbox_disc_stats() feeds the watchdog in xbox_crash_diag.cpp.
+//
 //   void dusk_xbox_pick_file(void (*done)(void* userdata, const char* utf8Path, const char* error),
 //                            void* userdata);
 // `done` is called exactly once, possibly on another thread: path set = selected, path null and error
@@ -44,6 +50,7 @@
 #include <winrt/Windows.UI.Core.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
@@ -51,6 +58,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 
 namespace {
 
@@ -257,10 +265,37 @@ HANDLE OpenKnownHandle(std::string* err) {
 
 // ---- SDL_IOStream over the HANDLE ---------------------------------------------------------------
 
+// Statistics of all disc streams, read by the watchdog in xbox_crash_diag.cpp.
+std::atomic<uint64_t> g_opens{0};
+std::atomic<uint64_t> g_reads{0};
+std::atomic<uint64_t> g_readBytes{0};
+std::atomic<uint64_t> g_readErrors{0};
+std::atomic<uint64_t> g_slowReads{0};
+std::atomic<int> g_inRead{0};
+std::atomic<uint64_t> g_inReadSince{0};
+std::atomic<int64_t> g_lastOffset{-1};
+std::atomic<uint64_t> g_lastLen{0};
+std::atomic<uint64_t> g_lastDone{0};
+
+// Reads are positioned with an OVERLAPPED offset, so the only state is the logical position that the SDL
+// seek/read pair works with. nod's preloader thread and Aurora's DVD worker thread use the same stream
+// at the same time (each does seek + read), so the position is kept per calling thread.
 struct DiscIo {
     HANDLE handle = nullptr;
     int64_t size = 0;
-    int64_t pos = 0;
+    std::atomic<uint64_t> reads{0};
+    std::mutex mutex;
+    std::unordered_map<DWORD, int64_t> positions;
+
+    int64_t GetPos(DWORD tid) {
+        std::lock_guard<std::mutex> lock(mutex);
+        auto it = positions.find(tid);
+        return it == positions.end() ? 0 : it->second;
+    }
+    void SetPos(DWORD tid, int64_t pos) {
+        std::lock_guard<std::mutex> lock(mutex);
+        positions[tid] = pos;
+    }
 };
 
 Sint64 SDLCALL DiscIoSize(void* userdata) {
@@ -269,13 +304,14 @@ Sint64 SDLCALL DiscIoSize(void* userdata) {
 
 Sint64 SDLCALL DiscIoSeek(void* userdata, Sint64 offset, SDL_IOWhence whence) {
     auto* io = static_cast<DiscIo*>(userdata);
+    const DWORD tid = GetCurrentThreadId();
     int64_t base = 0;
     switch (whence) {
     case SDL_IO_SEEK_SET:
         base = 0;
         break;
     case SDL_IO_SEEK_CUR:
-        base = io->pos;
+        base = io->GetPos(tid);
         break;
     case SDL_IO_SEEK_END:
         base = io->size;
@@ -289,17 +325,28 @@ Sint64 SDLCALL DiscIoSeek(void* userdata, Sint64 offset, SDL_IOWhence whence) {
         SDL_SetError("Seek before the start of the disc image");
         return -1;
     }
-    io->pos = target;
+    io->SetPos(tid, target);
     return target;
 }
 
 size_t SDLCALL DiscIoRead(void* userdata, void* ptr, size_t size, SDL_IOStatus* status) {
     auto* io = static_cast<DiscIo*>(userdata);
     auto* out = static_cast<uint8_t*>(ptr);
+    const DWORD tid = GetCurrentThreadId();
+    const int64_t start = io->GetPos(tid);
+    const uint64_t t0 = GetTickCount64();
+    const uint64_t number = g_reads.fetch_add(1) + 1;
+    io->reads.fetch_add(1);
+    g_lastOffset = start;
+    g_lastLen = size;
+    g_inReadSince = t0;
+    g_inRead.fetch_add(1);
+
     size_t total = 0;
+    DWORD lastError = 0;
     while (total < size) {
         const DWORD chunk = static_cast<DWORD>(std::min<size_t>(size - total, 1u << 30));
-        const uint64_t offset = static_cast<uint64_t>(io->pos) + total;
+        const uint64_t offset = static_cast<uint64_t>(start) + total;
         OVERLAPPED ov{};
         ov.Offset = static_cast<DWORD>(offset);
         ov.OffsetHigh = static_cast<DWORD>(offset >> 32);
@@ -309,6 +356,7 @@ size_t SDLCALL DiscIoRead(void* userdata, void* ptr, size_t size, SDL_IOStatus* 
             if (error == ERROR_HANDLE_EOF) {
                 *status = SDL_IO_STATUS_EOF;
             } else {
+                lastError = error;
                 SDL_SetError("ReadFile failed (Windows error %lu)", static_cast<unsigned long>(error));
                 *status = SDL_IO_STATUS_ERROR;
             }
@@ -320,7 +368,27 @@ size_t SDLCALL DiscIoRead(void* userdata, void* ptr, size_t size, SDL_IOStatus* 
         }
         total += got;
     }
-    io->pos += static_cast<int64_t>(total);
+
+    io->SetPos(tid, start + static_cast<int64_t>(total));
+    g_inRead.fetch_sub(1);
+    const uint64_t t1 = GetTickCount64();
+    g_lastDone = t1;
+    g_readBytes.fetch_add(total);
+    const uint64_t took = t1 - t0;
+    if (lastError != 0) {
+        g_readErrors.fetch_add(1);
+    }
+    if (took > 500) {
+        g_slowReads.fetch_add(1);
+    }
+    if (number <= 16 || lastError != 0 || took > 500) {
+        Log("read #%llu tid=%lu off=%lld len=%zu got=%zu took=%llu ms%s", static_cast<unsigned long long>(number),
+            static_cast<unsigned long>(tid), static_cast<long long>(start), size, total,
+            static_cast<unsigned long long>(took), lastError != 0 ? " ERROR" : (total < size ? " SHORT" : ""));
+        if (lastError != 0) {
+            Log("  windows error %lu", static_cast<unsigned long>(lastError));
+        }
+    }
     return total;
 }
 
@@ -332,6 +400,8 @@ size_t SDLCALL DiscIoWrite(void*, const void*, size_t, SDL_IOStatus* status) {
 
 bool SDLCALL DiscIoClose(void* userdata) {
     auto* io = static_cast<DiscIo*>(userdata);
+    Log("disc stream closed (%llu reads on it, %lld bytes image)", static_cast<unsigned long long>(io->reads.load()),
+        static_cast<long long>(io->size));
     if (io->handle != nullptr) {
         CloseHandle(io->handle);
     }
@@ -481,7 +551,9 @@ extern "C" SDL_IOStream* dusk_xbox_open_disc_stream(const char* utf8Path) {
         CloseHandle(h);
         return nullptr;
     }
-    auto* io = new DiscIo{h, size.QuadPart, 0};
+    auto* io = new DiscIo();
+    io->handle = h;
+    io->size = size.QuadPart;
     SDL_IOStreamInterface iface;
     SDL_INIT_INTERFACE(&iface);
     iface.size = DiscIoSize;
@@ -495,12 +567,30 @@ extern "C" SDL_IOStream* dusk_xbox_open_disc_stream(const char* utf8Path) {
         DiscIoClose(io);
         return nullptr;
     }
-    Log("open_disc_stream('%s'): ok, %lld bytes", utf8Path, static_cast<long long>(size.QuadPart));
+    g_opens.fetch_add(1);
+    Log("open_disc_stream('%s'): ok, %lld bytes (tid %lu)", utf8Path, static_cast<long long>(size.QuadPart),
+        static_cast<unsigned long>(GetCurrentThreadId()));
     return stream;
 }
 
 extern "C" bool dusk_xbox_is_picked_path(const char* utf8Path) {
     return IsKnownPath(utf8Path);
+}
+
+// out[10]: opens, reads, bytes read, read errors, slow reads (>500 ms), reads in progress, tick when the
+// latest read started, offset of the latest read, its length, tick when the latest read finished.
+extern "C" void dusk_xbox_disc_stats(unsigned long long* out) {
+    const int inRead = g_inRead.load();
+    out[0] = g_opens.load();
+    out[1] = g_reads.load();
+    out[2] = g_readBytes.load();
+    out[3] = g_readErrors.load();
+    out[4] = g_slowReads.load();
+    out[5] = inRead > 0 ? static_cast<unsigned long long>(inRead) : 0ull;
+    out[6] = g_inReadSince.load();
+    out[7] = static_cast<unsigned long long>(g_lastOffset.load());
+    out[8] = g_lastLen.load();
+    out[9] = g_lastDone.load();
 }
 
 extern "C" void dusk_xbox_pick_file(DoneFn done, void* userdata) {
