@@ -8,9 +8,11 @@
 //     corruption / ... (first chance, so also the ones the program handles itself) with a stack trace;
 //   * hooks for abort(), std::terminate and invalid CRT parameters (they end in a fast-fail that no exception
 //     handler sees) that log the calling thread's stack;
-//   * a watchdog that logs the disc read statistics (xbox_file_picker.cpp) and, shortly after the game starts
-//     reading the disc, dumps the stack of EVERY thread of the process a few times. A hung game shows up as
-//     threads parked in the same place in consecutive dumps.
+//   * a watchdog that logs the disc read statistics (xbox_file_picker.cpp), the app's memory usage against
+//     the limit Windows.System.MemoryManager reports (an app that exceeds it is killed without any trace),
+//     and, shortly after the game starts reading the disc, dumps the stack of EVERY thread of the process a
+//     few times. A hung game shows up as threads parked in the same place in consecutive dumps.
+// The previous launch's log is kept as crash-diag.prev.log (the app is often restarted right after a crash).
 // Function names come from symbols/dusklight.sym (generated from the linker map by Make-Symbols.ps1 in CI and
 // packaged in the msix); without it the frames show module + rva only.
 // The code only observes; it never changes behaviour. APIs whose availability in the UWP partition is not
@@ -20,6 +22,14 @@
 //   void dusk_xbox_crash_diag_start(const wchar_t* dir);
 
 #include <windows.h>
+
+#if __has_include(<winrt/Windows.System.h>)
+#include <winrt/base.h>
+#include <winrt/Windows.System.h>
+#define DUSK_CD_HAVE_MEMORY 1
+#else
+#define DUSK_CD_HAVE_MEMORY 0
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -373,7 +383,7 @@ void __cdecl OnInvalidParameter(const wchar_t* expression, const wchar_t* functi
     LogCurrentStack(title);
 }
 
-// ---- watchdog: disc statistics + stack dumps of every thread -----------------------------------
+// ---- watchdog: memory, disc statistics + stack dumps of every thread ---------------------------
 
 struct ThreadDump {
     DWORD tid;
@@ -450,8 +460,40 @@ void LogDisc(const unsigned long long* s) {
         s[0], s[1], s[2], s[3], s[4], s[5], s[6], static_cast<long long>(s[7]), s[8], s[9]);
 }
 
+#if DUSK_CD_HAVE_MEMORY
+// App memory usage against the limit of the app (Windows.System.MemoryManager). Logged when it moved by
+// 32 MiB, every 20 s, and every second once above 80% of the limit.
+void LogMemory(unsigned long long& lastUsage, ULONGLONG& lastTick, ULONGLONG now) {
+    try {
+        const unsigned long long usage = winrt::Windows::System::MemoryManager::AppMemoryUsage();
+        const unsigned long long limit = winrt::Windows::System::MemoryManager::AppMemoryUsageLimit();
+        const unsigned long long step = 32ull << 20;
+        const bool moved = usage > lastUsage + step || usage + step < lastUsage;
+        const bool near = limit != 0 && usage / 5 * 6 >= limit; // usage >= ~83% of the limit
+        if (moved || near || now - lastTick >= 20000) {
+            Out("memory: app usage %llu MiB, limit %llu MiB%s", usage >> 20, limit >> 20,
+                near ? " (NEAR THE LIMIT)" : "");
+            lastUsage = usage;
+            lastTick = now;
+        }
+    } catch (...) {
+    }
+}
+#endif
+
 void Watchdog() {
     Out("watchdog started");
+#if DUSK_CD_HAVE_MEMORY
+    try {
+        winrt::init_apartment(winrt::apartment_type::multi_threaded);
+    } catch (...) {
+        Out("init_apartment failed (memory logging may not work)");
+    }
+    unsigned long long lastUsage = 0;
+    ULONGLONG lastMemTick = 0;
+#else
+    Out("Windows.System header not available, memory is not logged");
+#endif
     LoadSymbols();
     const ULONGLONG t0 = GetTickCount64();
     ULONGLONG anchor = 0;
@@ -465,6 +507,9 @@ void Watchdog() {
     for (int i = 0; i < 3000; ++i) { // ~50 minutes
         std::this_thread::sleep_for(std::chrono::seconds(1));
         const ULONGLONG now = GetTickCount64();
+#if DUSK_CD_HAVE_MEMORY
+        LogMemory(lastUsage, lastMemTick, now);
+#endif
         unsigned long long s[10] = {};
         dusk_xbox_disc_stats(s);
         const bool changed = std::memcmp(s, last, sizeof(s)) != 0;
@@ -473,7 +518,7 @@ void Watchdog() {
             std::memcpy(last, s, sizeof(s));
             lastLog = now;
         }
-        // Opens of the disc: 1 = inspection, 2 = verification, 3 = the game itself.
+        // Opens of the disc: 1 = verification, 2 = inspection after "Continue anyway", 3 = the game itself.
         if (anchor == 0 && s[0] >= 3) {
             anchor = now;
             Out("the game opened the disc (open #%llu), thread dumps scheduled", s[0]);
@@ -511,6 +556,11 @@ void dusk_xbox_crash_diag_start(const wchar_t* dir) {
     }
     std::wstring path = dir;
     path += L"\\crash-diag.log";
+    // Keep the log of the previous launch: after a crash the app is usually started again right away.
+    std::wstring prev = dir;
+    prev += L"\\crash-diag.prev.log";
+    _wremove(prev.c_str());
+    _wrename(path.c_str(), prev.c_str());
     g_file = _wfopen(path.c_str(), L"w");
     if (g_file == nullptr) {
         return;
