@@ -18,10 +18,16 @@
 // The code only observes; it never changes behaviour. APIs whose availability in the UWP partition is not
 // certain are resolved with GetProcAddress at run time so they cannot break the build.
 //
+// NOTE: windows.h defines the macros near, far, min, max, IN, OUT, ... Do not use them as identifiers
+// (build 4b092092 failed on a variable called 'near').
+//
 // Entry point (called from dusk_xbox_input_diag_start, i.e. right before aurora_initialize, on the game thread):
 //   void dusk_xbox_crash_diag_start(const wchar_t* dir);
 
 #include <windows.h>
+
+#undef near
+#undef far
 
 #if __has_include(<winrt/Windows.System.h>)
 #include <winrt/base.h>
@@ -462,17 +468,17 @@ void LogDisc(const unsigned long long* s) {
 
 #if DUSK_CD_HAVE_MEMORY
 // App memory usage against the limit of the app (Windows.System.MemoryManager). Logged when it moved by
-// 32 MiB, every 20 s, and every second once above 80% of the limit.
+// 32 MiB, every 20 s, and every second once above ~83% of the limit.
 void LogMemory(unsigned long long& lastUsage, ULONGLONG& lastTick, ULONGLONG now) {
     try {
         const unsigned long long usage = winrt::Windows::System::MemoryManager::AppMemoryUsage();
         const unsigned long long limit = winrt::Windows::System::MemoryManager::AppMemoryUsageLimit();
         const unsigned long long step = 32ull << 20;
         const bool moved = usage > lastUsage + step || usage + step < lastUsage;
-        const bool near = limit != 0 && usage / 5 * 6 >= limit; // usage >= ~83% of the limit
-        if (moved || near || now - lastTick >= 20000) {
+        const bool closeToLimit = limit != 0 && usage / 5 * 6 >= limit;
+        if (moved || closeToLimit || now - lastTick >= 20000) {
             Out("memory: app usage %llu MiB, limit %llu MiB%s", usage >> 20, limit >> 20,
-                near ? " (NEAR THE LIMIT)" : "");
+                closeToLimit ? " (CLOSE TO THE LIMIT)" : "");
             lastUsage = usage;
             lastTick = now;
         }
