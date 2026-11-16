@@ -6,8 +6,7 @@
 // is called from borealis' file_select.cpp (patched in Apply-Patches.ps1) instead of SDL.
 //
 // FOUND ON HARDWARE (builds 97e2887f, deb17009): a file picked on a USB drive comes back as
-// 'E:\...\game.iso', but opening that path with Win32 fails with ERROR_ACCESS_DENIED (5), even with the
-// removableStorage / broadFileSystemAccess capabilities in the manifest (Patch-Manifest.ps1), and the
+// 'E:\...\game.iso', but opening that path with Win32 fails with ERROR_ACCESS_DENIED (5), and the
 // 1 GB image cannot be copied into the app's storage (quota: "The disk is full"). The broker does grant
 // access through the StorageFile object, so:
 //   * when the path cannot be opened directly, the StorageFile is remembered (and stored in the
@@ -19,6 +18,10 @@
 //     and the game itself read the image in place;
 //   * dusk_xbox_is_picked_path(path) lets borealis' io::check report that file as existing.
 // Every step is logged to <LocalState>\TwilitRealm\Dusklight\picker.log.
+//
+// Build 1c7ce4d8 log: "IStorageItemHandleAccess not available (0x80004002)" = E_NOINTERFACE, because the
+// IID below was wrong (the correct one is 5CA296B2-2C25-4D22-B785-B885C8201E6A, see
+// https://learn.microsoft.com/windows/win32/api/windowsstoragecom/nn-windowsstoragecom-istorageitemhandleaccess).
 //
 //   void dusk_xbox_pick_file(void (*done)(void* userdata, const char* utf8Path, const char* error),
 //                            void* userdata);
@@ -144,10 +147,10 @@ bool CanOpen(const wchar_t* path, DWORD* error) {
 
 // ---- StorageFile -> HANDLE ----------------------------------------------------------------------
 
-// IStorageItemHandleAccess (windows.storage.h / shobjidl_core.h). Declared here under another name so it
-// cannot clash with an SDK definition; only the IID and the vtable layout matter.
+// IStorageItemHandleAccess (windowsstoragecom.h, desktop partition only, so declared here under another
+// name). Only the IID and the vtable layout matter.
 const GUID kIidStorageItemHandleAccess = {
-    0x5CA296B2, 0x2C25, 0x4D22, {0xB7, 0x85, 0xB8, 0x85, 0xDB, 0x12, 0x0F, 0x7F}};
+    0x5CA296B2, 0x2C25, 0x4D22, {0xB7, 0x85, 0xB8, 0x85, 0xC8, 0x20, 0x1E, 0x6A}};
 
 struct IDuskStorageItemHandleAccess : IUnknown {
     virtual HRESULT STDMETHODCALLTYPE Create(UINT32 accessOptions, UINT32 sharingOptions, UINT32 options,
