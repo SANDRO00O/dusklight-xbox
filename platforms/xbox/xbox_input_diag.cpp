@@ -13,6 +13,9 @@
 //     which tells apart "the OS gives the app no controller" from "SDL does not enumerate it".
 // Everything runs on a detached background thread and only reads state; it never changes behaviour.
 //
+// This entry point also starts the crash / hang diagnostics (xbox_crash_diag.cpp -> crash-diag.log), so the
+// m_Do_main.cpp patch does not need to change.
+//
 // Entry point (called from the m_Do_main.cpp patch right before aurora_initialize):
 //   void dusk_xbox_input_diag_start(const wchar_t* dir);
 
@@ -37,6 +40,9 @@
 #else
 #define DUSK_DIAG_HAVE_WINRT_GAMING 0
 #endif
+
+// xbox_crash_diag.cpp
+void dusk_xbox_crash_diag_start(const wchar_t* dir);
 
 namespace {
 
@@ -237,6 +243,9 @@ void dusk_xbox_input_diag_start(const wchar_t* dir) {
     if (dir == nullptr) {
         return;
     }
+    // Crash / hang diagnostics (crash-diag.log); runs on the calling (game) thread so it knows its id.
+    dusk_xbox_crash_diag_start(dir);
+
     std::wstring path = dir;
     path += L"\\input-diag.log";
     {
