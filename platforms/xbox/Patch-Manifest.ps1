@@ -1,15 +1,21 @@
 <#
 .SYNOPSIS
   Adds the capabilities / file type associations the Xbox build needs to the AppX manifest that
-  CMake's WindowsStore support generated (Package.appxManifest next to dusklight.vcxproj).
+  CMake's WindowsStore support generated.
 
-  Why: CMake's default manifest only declares <Capability Name="internetClient"/>. With that, a path
-  returned by the FileOpenPicker for a file on a USB drive (E:\...) cannot be opened with Win32
-  (CreateFile2 fails with error 5), so the game could not read the disc image. A UWP app can open
-  files on removable storage by path only when its manifest declares
+  CMake (cmVisualStudio10TargetGenerator, WriteMissingFilesWS10_0) writes a default manifest, when the
+  target has no *.appxmanifest source, to <build>/CMakeFiles/<target>.dir/package.appxManifest
+  (Identity Publisher="CN=CMake", no <Capabilities> at all). Build 1c7ce4d8's installed manifest
+  confirmed none of our additions were in the package, because the first version of this script looked
+  for the file next to dusklight.vcxproj.
+
+  Why the additions: a path returned by the FileOpenPicker for a file on a USB drive (E:\...) cannot be
+  opened with Win32 (CreateFile2 fails with error 5). A UWP app can open files on removable storage by
+  path only when its manifest declares
     * the removableStorage capability, and
     * a file type association for the file's extension.
-  broadFileSystemAccess is added as well (RetroArch's UWP build declares the same three things).
+  broadFileSystemAccess is added as well (RetroArch's UWP build declares the same three things). The
+  game also falls back to the StorageFile handle (xbox_file_picker.cpp) when the path stays denied.
 
   Identity/Publisher are left untouched, so the package keeps the identity CMake generated and the
   signing certificate still matches. Idempotent. Called by ci.ps1 right before the build.
@@ -20,14 +26,19 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$vcxproj = Get-ChildItem -Path $BuildDir -Filter 'dusklight.vcxproj' -File -ErrorAction SilentlyContinue | Select-Object -First 1
-if (-not $vcxproj) {
-    $vcxproj = Get-ChildItem -Path $BuildDir -Filter 'dusklight.vcxproj' -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+function Find-Manifest([string]$Dir) {
+    if (-not (Test-Path $Dir)) { return $null }
+    Get-ChildItem -Path $Dir -Recurse -File -Filter 'package.appxmanifest' -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -notmatch '[\\/](_deps|ext)[\\/]' }
 }
-if (-not $vcxproj) { throw "dusklight.vcxproj not found under $BuildDir" }
 
-$manifest = Get-ChildItem -Path $vcxproj.DirectoryName -Filter 'Package.appxmanifest' -File | Select-Object -First 1
-if (-not $manifest) { throw "Package.appxManifest not found next to $($vcxproj.FullName)" }
+# 1) where CMake writes it: <build>/CMakeFiles/dusklight.dir/package.appxManifest
+$candidates = @(Find-Manifest (Join-Path $BuildDir 'CMakeFiles/dusklight.dir'))
+# 2) anywhere else in the build tree
+if ($candidates.Count -eq 0) { $candidates = @(Find-Manifest $BuildDir) }
+Write-Host ('manifest candidates: ' + (($candidates | ForEach-Object { $_.FullName }) -join '; '))
+$manifest = $candidates | Sort-Object { if ($_.FullName -match 'dusklight') { 0 } else { 1 } } | Select-Object -First 1
+if (-not $manifest) { throw "package.appxManifest not found under $BuildDir" }
 
 Write-Host "Patching manifest: $($manifest.FullName)"
 $text = [System.IO.File]::ReadAllText($manifest.FullName)
@@ -65,6 +76,8 @@ if ($missing.Count -gt 0) {
     $block = ($missing | ForEach-Object { '    ' + $_.Line }) -join "`r`n"
     if ($text -match '</Capabilities>') {
         $text = [regex]::Replace($text, '</Capabilities>', ($block + "`r`n  </Capabilities>"), 1)
+    } elseif ($text -match '<Capabilities\s*/>') {
+        $text = [regex]::Replace($text, '<Capabilities\s*/>', ("<Capabilities>`r`n" + $block + "`r`n  </Capabilities>"), 1)
     } else {
         $text = [regex]::Replace($text, '</Package>', ("  <Capabilities>`r`n" + $block + "`r`n  </Capabilities>`r`n</Package>"), 1)
     }
