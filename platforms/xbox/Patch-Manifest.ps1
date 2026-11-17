@@ -123,6 +123,12 @@ if ($text -ne $original) {
 # or pointing the manifest at new paths risks an empty resource index, the fork 999sian/dusklight got
 # install error 0x80070002 from that.)
 $assetDir = Join-Path $BuildDir 'Assets'
+# Generate the images here, so ci.ps1 needs no extra step (Generate-Assets.ps1 runs again at the end of ci.ps1).
+try {
+    & (Join-Path $PSScriptRoot 'Generate-Assets.ps1') -InputPng (Join-Path $PSScriptRoot '../../res/icon.png') -OutputDir $assetDir
+} catch {
+    Write-Host "::warning::Generate-Assets.ps1 failed, the package keeps CMake's placeholder images: $_"
+}
 $manifestDir = $manifest.DirectoryName
 $imageRefs = @(
     @{ Rx = '<Logo>\s*([^<]+?)\s*</Logo>';                  Gen = 'StoreLogo.png' },
