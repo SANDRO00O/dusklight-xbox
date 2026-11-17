@@ -137,5 +137,9 @@ if ($LASTEXITCODE -ne 0) { $script:failed = $true }
 & (Join-Path $PSScriptRoot 'Apply-Patches-Card.ps1') -RepoRoot $RepoRoot
 if ($LASTEXITCODE -ne 0) { $script:failed = $true }
 
+# --- game: water refraction off by default + switch in the settings UI (30 fps in Ordon Village) ---
+& (Join-Path $PSScriptRoot 'Apply-Patches-Water.ps1') -RepoRoot $RepoRoot
+if ($LASTEXITCODE -ne 0) { $script:failed = $true }
+
 if ($script:failed) { exit 1 }
 exit 0
