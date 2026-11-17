@@ -19,8 +19,6 @@
   Idempotent; exits 1 when an anchor does not match exactly as often as expected.
 
   Every file patched here must be listed in $alwaysFresh of Cache-Mtimes.ps1.
-
-  Also runs Apply-Patches-Sdl.ps1 (patch of the SDL3-uwp clone: audio-init deadlock).
 #>
 param(
     [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
@@ -125,6 +123,10 @@ Patch-Disc 'extern/borealis/src/io.cpp' $ioEdits
 # --- SDL3-uwp clone: SDL_Thread::threadid (hang in SDL_OpenAudioDevice, see Apply-Patches-Sdl.ps1) ---
 # Kept here so ci.ps1 does not need another call; the clone (build/ext/SDL3-uwp) is fetched before this runs.
 & (Join-Path $PSScriptRoot 'Apply-Patches-Sdl.ps1') -RepoRoot $RepoRoot
+if ($LASTEXITCODE -ne 0) { $script:failed = $true }
+
+# --- aurora: lib/webgpu/gpu.cpp, Dawn toggle disable_resource_suballocation (CreatePlacedResource crash) ---
+& (Join-Path $PSScriptRoot 'Apply-Patches-Gpu.ps1') -RepoRoot $RepoRoot
 if ($LASTEXITCODE -ne 0) { $script:failed = $true }
 
 if ($script:failed) { exit 1 }
