@@ -41,6 +41,7 @@ foreach ($p in @(
     'extern/aurora/lib/dawn/BackendBinding.cpp',
     'extern/aurora/lib/aurora.cpp',          # patched in build 789faead (D3D12 skip), patch since removed
     'extern/aurora/lib/dolphin/dvd/dvd.cpp', # read the picked disc through its StorageFile handle
+    'extern/aurora/lib/webgpu/gpu.cpp',      # Dawn toggle disable_resource_suballocation (Apply-Patches-Gpu.ps1)
     'extern/borealis/src/io.cpp',            # CreateFileW shim + the same disc hook
     'extern/borealis/src/log.cpp',           # flush the log file on every line
     'extern/borealis/src/file_select/file_select.cpp', # own UWP file picker
