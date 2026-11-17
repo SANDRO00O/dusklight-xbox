@@ -129,5 +129,9 @@ if ($LASTEXITCODE -ne 0) { $script:failed = $true }
 & (Join-Path $PSScriptRoot 'Apply-Patches-Gpu.ps1') -RepoRoot $RepoRoot
 if ($LASTEXITCODE -ne 0) { $script:failed = $true }
 
+# --- CPU work reduction from 999sian/dusklight: aurora pipeline queue promote, game matrix recording maps ---
+& (Join-Path $PSScriptRoot 'Apply-Patches-Cpu.ps1') -RepoRoot $RepoRoot
+if ($LASTEXITCODE -ne 0) { $script:failed = $true }
+
 if ($script:failed) { exit 1 }
 exit 0
