@@ -107,49 +107,45 @@ $types
     }
 }
 
+# --- branded tile / logo / splash images ---------------------------------------------------------
+# xbox-project.cmake adds the PNGs generated from res/icon.png (<build>/Assets) to the project as Image
+# items that are also deployment content in the package folder Assets\ (the way the fork 999sian/dusklight
+# does it, which also keeps them in the PRI index). CMake's own default manifest still points at its
+# placeholder PNGs under CMakeFiles\dusklight.dir, which are NOT packaged: the console showed the blue
+# manifest background and a square with an X as splash screen. Point the manifest at the packaged images,
+# but only for images the project really contains, because a reference to a file that is not in the
+# package makes the install fail.
+$projFile = Get-ChildItem -Path $BuildDir -File -Filter 'dusklight.vcxproj' -ErrorAction SilentlyContinue | Select-Object -First 1
+$projText = if ($projFile) { [System.IO.File]::ReadAllText($projFile.FullName) } else { '' }
+function Test-PackagedAsset([string]$Name) {
+    # <Image Include="...\Assets\<Name>"> ... <Link>Assets\...</Link> ... </Image>
+    return ($projText -match ('(?s)<Image Include="[^"]*Assets[\\/]' + [regex]::Escape($Name) + '">(?:(?!</Image>).)*?<Link>Assets\\'))
+}
+$imageRefs = @(
+    @{ Rx = '(<Logo>)\s*[^<]+?\s*(</Logo>)';                 Asset = 'StoreLogo.png';           Repl = '${1}Assets\StoreLogo.png${2}' },
+    @{ Rx = '(Square150x150Logo=")[^"]+(")';                    Asset = 'Square150x150Logo.png';   Repl = '${1}Assets\Square150x150Logo.png${2}' },
+    @{ Rx = '(Square44x44Logo=")[^"]+(")';                      Asset = 'Square44x44Logo.png';     Repl = '${1}Assets\Square44x44Logo.png${2}' },
+    @{ Rx = '(<uap:SplashScreen\b[^>]*?\bImage=")[^"]+(")';    Asset = 'SplashScreen.png';        Repl = '${1}Assets\SplashScreen.png${2}' }
+)
+if (-not $projFile) { Write-Host "::warning::dusklight.vcxproj not found under $BuildDir; manifest images left as CMake wrote them" }
+$allAssets = $true
+foreach ($r in $imageRefs) {
+    if (-not (Test-PackagedAsset $r.Asset)) { $allAssets = $false; Write-Host "::warning::Assets\$($r.Asset) is not in the project; manifest image left as CMake wrote it" }
+}
+if ($projFile -and $allAssets) {
+    foreach ($r in $imageRefs) {
+        $text = [regex]::Replace($text, $r.Rx, $r.Repl)
+        Write-Host "manifest image -> Assets\$($r.Asset)"
+    }
+    # Same dark colour as the splash image background (Generate-Assets.ps1).
+    $text = [regex]::Replace($text, '(BackgroundColor=")#[0-9A-Fa-f]{6}(")', '${1}#10141C${2}')
+}
+
 if ($text -ne $original) {
     [System.IO.File]::WriteAllText($manifest.FullName, $text, (New-Object System.Text.UTF8Encoding($false)))
     Write-Host 'Manifest patched.'
 } else {
     Write-Host 'Manifest already patched.'
-}
-
-# --- branded tile / logo / splash images ---------------------------------------------------------
-# The manifest CMake generated points at CMake's own placeholder PNGs (Logo.png, SmallLogo.png,
-# StoreLogo.png, SplashScreen.png ...) that it writes next to the manifest and adds to the project as
-# image items, i.e. they are already in the package's resource index (PRI). The installed app therefore
-# showed CMake's generic splash. Overwrite those files in place with the ones Generate-Assets.ps1 made from
-# res/icon.png: same names, same items, same PRI entries, only the pixels change. (Adding new image files
-# or pointing the manifest at new paths risks an empty resource index, the fork 999sian/dusklight got
-# install error 0x80070002 from that.)
-$assetDir = Join-Path $BuildDir 'Assets'
-# Generate the images here, so ci.ps1 needs no extra step (Generate-Assets.ps1 runs again at the end of ci.ps1).
-try {
-    & (Join-Path $PSScriptRoot 'Generate-Assets.ps1') -InputPng (Join-Path $PSScriptRoot '../../res/icon.png') -OutputDir $assetDir
-} catch {
-    Write-Host "::warning::Generate-Assets.ps1 failed, the package keeps CMake's placeholder images: $_"
-}
-$manifestDir = $manifest.DirectoryName
-$imageRefs = @(
-    @{ Rx = '<Logo>\s*([^<]+?)\s*</Logo>';                  Gen = 'StoreLogo.png' },
-    @{ Rx = 'Square150x150Logo="([^"]+)"';                   Gen = 'Square150x150Logo.png' },
-    @{ Rx = 'Square44x44Logo="([^"]+)"';                     Gen = 'Square44x44Logo.png' },
-    @{ Rx = 'Wide310x150Logo="([^"]+)"';                     Gen = 'Wide310x150Logo.png' },
-    @{ Rx = '<uap:SplashScreen\b[^>]*?\bImage="([^"]+)"';    Gen = 'SplashScreen.png' }
-)
-Write-Host "images next to the manifest ($manifestDir):"
-Get-ChildItem -Path $manifestDir -File -Filter '*.png' -ErrorAction SilentlyContinue |
-    ForEach-Object { Write-Host ('  {0,8:N0}  {1}' -f $_.Length, $_.Name) }
-foreach ($r in $imageRefs) {
-    $m = [regex]::Match($text, $r.Rx)
-    if (-not $m.Success) { Write-Host "image ref for $($r.Gen): not in the manifest, skipped"; continue }
-    $ref = $m.Groups[1].Value
-    $target = Join-Path $manifestDir ($ref -replace '\\', '/')
-    $generated = Join-Path $assetDir $r.Gen
-    if (-not (Test-Path $generated)) { Write-Host "::warning::generated image missing: $generated"; continue }
-    if (-not (Test-Path $target)) { Write-Host "::warning::manifest references '$ref' but $target does not exist; left alone"; continue }
-    Copy-Item -Force -Path $generated -Destination $target
-    Write-Host ("branded image: {0} <- {1}" -f $ref, $r.Gen)
 }
 
 # Validate it is still well-formed XML.

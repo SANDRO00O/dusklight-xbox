@@ -122,7 +122,49 @@ function(_dusk_xbox_package_resources)
   message(STATUS "xbox: ${_sym} marked as package content (symbols/)")
 endfunction()
 
+# --- Branded tile/logo/splash images in the MSIX package -----------------------------------------
+# CMake's default manifest (it writes one because the target has no *.appxmanifest source) points at
+# placeholder PNGs under CMakeFiles/dusklight.dir that it adds only as plain Image items, WITHOUT
+# deployment content, so they never enter the package. On the console the splash screen then showed the
+# manifest's background colour (#336699, blue) and a square with an X (image missing).
+# The fork 999sian/dusklight packages its images as Image items that are also deployment content in the
+# package's Assets folder ("Image items must enter the PRI index so unqualified manifest paths
+# resolve"). Do the same: generate the PNGs from res/icon.png at configure time and add them that way.
+# Patch-Manifest.ps1 then points the manifest at Assets\<name>.png, but only when the project really
+# contains these files (otherwise the package could not be installed).
+function(_dusk_xbox_package_assets)
+  if(NOT TARGET dusklight)
+    return()
+  endif()
+  set(_assets_dir "${CMAKE_BINARY_DIR}/Assets")
+  execute_process(
+    COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_SOURCE_DIR}/platforms/xbox/Generate-Assets.ps1"
+            -InputPng "${CMAKE_SOURCE_DIR}/res/icon.png" -OutputDir "${_assets_dir}"
+    RESULT_VARIABLE _rc OUTPUT_VARIABLE _out ERROR_VARIABLE _err)
+  if(NOT _rc EQUAL 0)
+    message(WARNING "xbox: Generate-Assets.ps1 failed (${_rc}): ${_err} ${_out}")
+    return()
+  endif()
+  set(_count 0)
+  foreach(_name IN ITEMS StoreLogo Square44x44Logo Square150x150Logo SplashScreen)
+    set(_png "${_assets_dir}/${_name}.png")
+    if(NOT EXISTS "${_png}")
+      message(WARNING "xbox: ${_png} was not generated")
+      continue()
+    endif()
+    target_sources(dusklight PRIVATE "${_png}")
+    set_source_files_properties("${_png}" PROPERTIES
+      VS_TOOL_OVERRIDE Image
+      VS_DEPLOYMENT_CONTENT TRUE
+      VS_DEPLOYMENT_LOCATION "Assets")
+    math(EXPR _count "${_count}+1")
+  endforeach()
+  message(STATUS "xbox: ${_count} branded image(s) in ${_assets_dir} added as package content (Assets/)")
+endfunction()
+
 cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL _dusk_xbox_sdl_cxx17)
 cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL _dusk_xbox_freetype_system)
 cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL _dusk_xbox_link_stubs)
 cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL _dusk_xbox_package_resources)
+cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL _dusk_xbox_package_assets)
