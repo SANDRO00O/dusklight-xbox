@@ -17,6 +17,9 @@
   broadFileSystemAccess is added as well (RetroArch's UWP build declares the same three things). The
   game also falls back to the StorageFile handle (xbox_file_picker.cpp) when the path stays denied.
 
+  internetClient: without it UWP blocks every outgoing connection, so the online mod catalog (WinHTTP in
+  borealis::http) could not be reached.
+
   Identity/Publisher are left untouched, so the package keeps the identity CMake generated and the
   signing certificate still matches. Idempotent. Called by ci.ps1 right before the build.
 #>
@@ -68,6 +71,7 @@ if ($ign.Success) {
 
 # --- capabilities ---
 $caps = @(
+    @{ Name = 'internetClient';          Line = '<Capability Name="internetClient" />' },
     @{ Name = 'removableStorage';        Line = '<uap:Capability Name="removableStorage" />' },
     @{ Name = 'broadFileSystemAccess';   Line = '<rescap:Capability Name="broadFileSystemAccess" />' }
 )
