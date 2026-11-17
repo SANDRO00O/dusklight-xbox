@@ -45,6 +45,8 @@ foreach ($p in @(
     'extern/aurora/lib/webgpu/gpu.cpp',      # Dawn toggle disable_resource_suballocation (Apply-Patches-Gpu.ps1)
     'extern/aurora/lib/gfx/pipeline_cache.cpp', # pending-pipeline map (Apply-Patches-Cpu.ps1)
     'src/dusk/interp/frame_interpolation.cpp',  # matrix recording maps (Apply-Patches-Cpu.ps1)
+    'src/dusk/settings.cpp',                 # water refraction default on UWP (Apply-Patches-Water.ps1)
+    'src/dusk/ui/settings.cpp',              # water refraction switch in the settings UI (Apply-Patches-Water.ps1)
     'extern/borealis/src/io.cpp',            # CreateFileW shim + the same disc hook
     'extern/borealis/src/log.cpp',           # flush the log file on every line
     'extern/borealis/src/file_select/file_select.cpp', # own UWP file picker
