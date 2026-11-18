@@ -145,5 +145,12 @@ if ($LASTEXITCODE -ne 0) { $script:failed = $true }
 & (Join-Path $PSScriptRoot 'Apply-Patches-Ui.ps1') -RepoRoot $RepoRoot
 if ($LASTEXITCODE -ne 0) { $script:failed = $true }
 
+# --- bundled pipeline list (initial_pipeline_cache.db) staged for the package; best effort ---
+& (Join-Path $PSScriptRoot 'Fetch-PipelineSeed.ps1') -RepoRoot $RepoRoot
+
+# --- aurora: lib/gfx/pipeline_cache.cpp, warmup order / low priority background compile / build timing ---
+& (Join-Path $PSScriptRoot 'Apply-Patches-Shaders.ps1') -RepoRoot $RepoRoot
+if ($LASTEXITCODE -ne 0) { $script:failed = $true }
+
 if ($script:failed) { exit 1 }
 exit 0
