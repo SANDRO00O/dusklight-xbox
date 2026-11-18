@@ -163,8 +163,31 @@ function(_dusk_xbox_package_assets)
   message(STATUS "xbox: ${_count} branded image(s) in ${_assets_dir} added as package content (Assets/)")
 endfunction()
 
+# --- Bundled pipeline list in the package root ---------------------------------------------------
+# Fetch-PipelineSeed.ps1 (run by Apply-Patches-Disc.ps1 before configure) stages upstream's
+# initial_pipeline_cache.db. Aurora looks for it next to the executable (resourcesPath) at start and
+# merges it into pipeline_cache.db, so every known material is compiled in the background instead of on
+# first use. Same packaging as the fork 999sian/dusklight (package root, deployment content).
+function(_dusk_xbox_package_pipeline_seed)
+  if(NOT TARGET dusklight)
+    return()
+  endif()
+  set(_seed "${CMAKE_SOURCE_DIR}/build/ext/pipeline-seed/initial_pipeline_cache.db")
+  if(NOT EXISTS "${_seed}")
+    message(WARNING "xbox: ${_seed} not found; shaders will only be compiled when first used")
+    return()
+  endif()
+  target_sources(dusklight PRIVATE "${_seed}")
+  set_source_files_properties("${_seed}" PROPERTIES
+    VS_DEPLOYMENT_CONTENT TRUE
+    VS_DEPLOYMENT_LOCATION "."
+    VS_COPY_TO_OUT_DIR Always)
+  message(STATUS "xbox: ${_seed} added to the package root")
+endfunction()
+
 cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL _dusk_xbox_sdl_cxx17)
 cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL _dusk_xbox_freetype_system)
 cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL _dusk_xbox_link_stubs)
 cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL _dusk_xbox_package_resources)
 cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL _dusk_xbox_package_assets)
+cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL _dusk_xbox_package_pipeline_seed)
