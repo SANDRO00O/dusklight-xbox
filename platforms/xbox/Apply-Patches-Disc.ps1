@@ -156,5 +156,9 @@ if ($LASTEXITCODE -ne 0) { $script:failed = $true }
 & (Join-Path $PSScriptRoot 'Apply-Patches-Shaders2.ps1') -RepoRoot $RepoRoot
 if ($LASTEXITCODE -ne 0) { $script:failed = $true }
 
+# --- game: optional title-scene override via title-scene.txt (EXPERIMENTAL, no effect without that file) ---
+& (Join-Path $PSScriptRoot 'Apply-Patches-Title.ps1') -RepoRoot $RepoRoot
+if ($LASTEXITCODE -ne 0) { $script:failed = $true }
+
 if ($script:failed) { exit 1 }
 exit 0
