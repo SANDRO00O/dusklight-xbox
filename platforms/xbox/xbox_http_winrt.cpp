@@ -13,7 +13,9 @@
 // exactly like src/http/curl.cpp does: send one request, report the response head to the observer, stream
 // the body to the observer, and honour cancellation and the deadline.
 //
-// Not compiled or run on hardware when this was written; the build log will show any compile error.
+// First console run (build 8415bd1): the backend was selected and compiled, but every request failed with
+// 0x80000018 (E_ILLEGAL_DELEGATE_ASSIGNMENT): wait_for() was called in a loop and assigns the Completed
+// handler each time. wait_for_operation() below assigns it once.
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -37,9 +39,11 @@
 #include <winrt/Windows.Web.Http.Filters.h>
 #include <winrt/Windows.Web.Http.Headers.h>
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <memory>
 #include <span>
 #include <string>
 #include <string_view>
@@ -122,13 +126,26 @@ enum class WaitResult {
 };
 
 // Waits for an asynchronous operation in short slices so cancellation and the deadline are honoured.
+//
+// NOT operation.wait_for() in a loop: C++/WinRT's wait_for assigns the operation's Completed handler, and a
+// handler may be assigned only once, so the second slice failed with E_ILLEGAL_DELEGATE_ASSIGNMENT
+// (0x80000018, "A delegate was assigned when not allowed", seen on the console). The handler is assigned
+// once here and signals an event the loop waits on; the event is shared so a late completion after an early
+// return (cancel / timeout) never touches a closed handle.
 template <typename Async>
 WaitResult wait_for_operation(const Async& operation, const borealis::http::detail::TransportRequest& request,
     const borealis::http::detail::Deadline::Tracker& tracker) {
+    auto done = std::make_shared<winrt::handle>(
+        CreateEventExW(nullptr, nullptr, CREATE_EVENT_MANUAL_RESET, SYNCHRONIZE | EVENT_MODIFY_STATE));
+    if (!*done) {
+        winrt::throw_last_error();
+    }
+    operation.Completed([done](const auto&, wf::AsyncStatus) { SetEvent(done->get()); });
+    const DWORD pollMs = static_cast<DWORD>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(borealis::http::detail::Deadline::PollInterval)
+            .count());
     while (true) {
-        if (operation.wait_for(borealis::http::detail::Deadline::PollInterval) !=
-            wf::AsyncStatus::Started)
-        {
+        if (WaitForSingleObjectEx(done->get(), pollMs, FALSE) == WAIT_OBJECT_0) {
             return WaitResult::Finished;
         }
         if (request.signals->cancelRequested.load(std::memory_order_relaxed)) {
