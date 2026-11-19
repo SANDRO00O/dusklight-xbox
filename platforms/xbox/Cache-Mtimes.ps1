@@ -54,7 +54,9 @@ foreach ($p in @(
     'src/m_Do/m_Do_main.cpp',                # graphics probe hook
     'src/d/d_com_inf_game.cpp',              # title-scene override (Apply-Patches-Title.ps1)
     'src/d/d_s_play.cpp',                    # same
-    'src/d/actor/d_a_title.cpp'              # same
+    'src/d/actor/d_a_title.cpp',             # same
+    'src/d/d_camera.cpp',                    # same (cinematic title camera)
+    'src/d/d_stage.cpp'                      # same (spawn point fallback)
 )) { [void]$alwaysFresh.Add($p) }
 
 # One-off: the first cached build (workflow run 117453502716, commit below) wrote an empty stamp
