@@ -24,6 +24,10 @@
   Game-mode resource budget (more CPU cores, 5 GB instead of 1 GB, full GPU) instead of App mode. Whether the
   console grants it also depends on the package type (Device Portal / Dev Home: "Game").
 
+  codeGeneration (general-use capability, the fork 999sian/dusklight declares it too): allows executable
+  memory through VirtualProtectFromApp / CreateFileMappingFromApp / MapViewOfFileFromApp (never writable and
+  executable at once). Needed to find out whether native mods can work (xbox_jit_probe.cpp).
+
   Identity/Publisher are left untouched, so the package keeps the identity CMake generated and the
   signing certificate still matches. Idempotent. Called by ci.ps1 right before the build.
 #>
@@ -78,7 +82,8 @@ $caps = @(
     @{ Name = 'internetClient';          Line = '<Capability Name="internetClient" />' },
     @{ Name = 'removableStorage';        Line = '<uap:Capability Name="removableStorage" />' },
     @{ Name = 'broadFileSystemAccess';   Line = '<rescap:Capability Name="broadFileSystemAccess" />' },
-    @{ Name = 'expandedResources';       Line = '<rescap:Capability Name="expandedResources" />' }
+    @{ Name = 'expandedResources';       Line = '<rescap:Capability Name="expandedResources" />' },
+    @{ Name = 'codeGeneration';          Line = '<Capability Name="codeGeneration" />' }
 )
 $missing = @($caps | Where-Object { $text -notmatch ('Name="' + $_.Name + '"') })
 if ($missing.Count -gt 0) {

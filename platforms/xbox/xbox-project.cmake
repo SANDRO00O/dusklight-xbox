@@ -66,6 +66,8 @@ endfunction()
 #   The linker writes a map (/MAP) that ci.ps1 turns into symbols/dusklight.sym (see below).
 # * xbox_file_picker.cpp: FileOpenPicker for the disc image, called from borealis' file_select.cpp
 #   (patched in Apply-Patches.ps1).
+# * xbox_jit_probe.cpp: one-time feasibility probe for native mods (executable memory, image patching,
+#   module loading); writes jit-probe.log, starts itself from a static initialiser.
 function(_dusk_xbox_link_stubs)
   if(TARGET dusklight)
     target_sources(dusklight PRIVATE
@@ -74,7 +76,8 @@ function(_dusk_xbox_link_stubs)
       "${CMAKE_SOURCE_DIR}/platforms/xbox/xbox_gfx_probe_deep.cpp"
       "${CMAKE_SOURCE_DIR}/platforms/xbox/xbox_input_diag.cpp"
       "${CMAKE_SOURCE_DIR}/platforms/xbox/xbox_crash_diag.cpp"
-      "${CMAKE_SOURCE_DIR}/platforms/xbox/xbox_file_picker.cpp")
+      "${CMAKE_SOURCE_DIR}/platforms/xbox/xbox_file_picker.cpp"
+      "${CMAKE_SOURCE_DIR}/platforms/xbox/xbox_jit_probe.cpp")
     target_link_options(dusklight PRIVATE "/MAP:${CMAKE_BINARY_DIR}/dusklight.map")
     message(STATUS "xbox: added abseil_uwp_stubs.cpp, xbox_gfx_probe*.cpp, xbox_input_diag.cpp, xbox_crash_diag.cpp and xbox_file_picker.cpp to dusklight; linker map -> ${CMAKE_BINARY_DIR}/dusklight.map")
   endif()
