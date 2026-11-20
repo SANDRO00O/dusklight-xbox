@@ -88,7 +88,8 @@ $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer
 if (Test-Path $vswhere) {
     & $vswhere -all -products * -format json 2>&1 | Out-File -FilePath vswhere.log -Encoding utf8
     Write-Host '--- Visual Studio installs ---'
-    & $vswhere -all -products * -property displayName, installationVersion, installationPath 2>&1
+    $vsInfo = Get-Content -Raw 'vswhere.log' | ConvertFrom-Json
+    $vsInfo | ForEach-Object { Write-Host ("{0} | {1} | {2}" -f $_.displayName, $_.installationVersion, $_.installationPath) }
     $uwp = & $vswhere -all -products * -requires Microsoft.VisualStudio.ComponentGroup.UWP.VC 2>&1
     Write-Host ('UWP C++ component group present: ' + [bool]$uwp)
     $uwpSdk = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Include" -Directory -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
