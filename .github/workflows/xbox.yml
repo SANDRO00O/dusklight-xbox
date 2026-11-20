@@ -50,9 +50,12 @@ jobs:
           try {
             $toolchainJson = & ./platforms/xbox/Get-ToolchainInfo.ps1 -AsJson
             if (-not $toolchainJson) { throw 'Toolchain resolver returned no data.' }
-            $toolchain = $toolchainJson | ConvertFrom-Json
+            $toolchainJsonText = $toolchainJson -join [Environment]::NewLine
+            $toolchain = $toolchainJsonText | ConvertFrom-Json
             if (-not $toolchain.CachePrefix) { throw 'Toolchain resolver returned no cache fingerprint.' }
 
+            $toolchainJsonCompact = $toolchain | ConvertTo-Json -Compress -Depth 4
+            "toolchain_json=$toolchainJsonCompact" >> $env:GITHUB_OUTPUT
             "cacheable=true" >> $env:GITHUB_OUTPUT
             "prefix=$($toolchain.CachePrefix)" >> $env:GITHUB_OUTPUT
             Write-Host "Cache fingerprint: $($toolchain.CacheFingerprint)"
@@ -83,6 +86,8 @@ jobs:
 
       - name: Configure and build
         shell: pwsh
+        env:
+          XBOX_TOOLCHAIN_JSON: ${{ steps.cachekey.outputs.toolchain_json }}
         run: ./platforms/xbox/ci.ps1
 
       - name: Save build cache
