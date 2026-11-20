@@ -30,13 +30,17 @@ if (-not $vswhere) {
     throw 'vswhere.exe was not found in the standard Visual Studio Installer locations.'
 }
 
-# Do not use -latest here. It can select a newer VS instance that does not contain the UWP C++
-# workload while an older, usable UWP instance is installed. Enumerate every matching instance,
-# then select the newest complete instance for which CMake has a matching generator.
+# Do not require the legacy generic ComponentGroup.UWP.VC ID. The current VS 2026 hosted
+# image exposes the Universal workload and the x86/x64 C++ compiler as separate components, and
+# its UWP toolset is v145. Requiring the retired/absent aggregate ID incorrectly rejects that image.
+# Require the actual Universal workload plus the native x86/x64 compiler, then validate the compiler,
+# SDK, generator and MSBuild toolset files below before accepting the instance.
 $vswhereArgs = @(
     '-all',
     '-products', '*',
-    '-requires', 'Microsoft.VisualStudio.ComponentGroup.UWP.VC',
+    '-requires',
+    'Microsoft.VisualStudio.Workload.Universal',
+    'Microsoft.VisualStudio.Component.VC.Tools.x86.x64',
     '-format', 'json',
     '-utf8'
 )
