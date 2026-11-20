@@ -77,12 +77,14 @@ jobs:
           $prefix = "xbox-uwp-$($env:CACHE_VERSION)-vs$vsMajor-msvc$msvcAbiMajor-sdk$($sdkVersion.Name)-cmake$cmakeMajor-"
           "prefix=$prefix" >> $env:GITHUB_OUTPUT
 
-          # One-time bridge to the last known-good cache (run #37). Only allow it while
-          # the same VS/ABI/SDK/CMake compatibility family is present.
+          # Migrate the current caches once. Prefer completed run #39 (same source commit and current
+          # toolchain), then run #37. Stop using these image-specific prefixes after this compatibility family changes.
           if ($vsMajor -eq '18' -and $msvcAbiMajor -eq '14' -and $sdkVersion.Name -eq '10.0.26100.0' -and $cmakeMajor -eq '4') {
-            'legacy_prefix=xbox-uwp-v1-20261103.298.1-' >> $env:GITHUB_OUTPUT
+            'legacy_current_prefix=xbox-uwp-v1-20261116.315.1-' >> $env:GITHUB_OUTPUT
+            'legacy_previous_prefix=xbox-uwp-v1-20261103.298.1-' >> $env:GITHUB_OUTPUT
           } else {
-            'legacy_prefix=' >> $env:GITHUB_OUTPUT
+            'legacy_current_prefix=' >> $env:GITHUB_OUTPUT
+            'legacy_previous_prefix=' >> $env:GITHUB_OUTPUT
           }
           Write-Host "Cache key: $prefix"
           Write-Host "Visual Studio $vsVersion; MSVC toolset $($msvcVersion.Name); Windows SDK $($sdkVersion.Name); $cmakeLine"
@@ -99,7 +101,8 @@ jobs:
           key: ${{ steps.cachekey.outputs.prefix }}${{ github.run_id }}
           restore-keys: |
             ${{ steps.cachekey.outputs.prefix }}
-            ${{ steps.cachekey.outputs.legacy_prefix }}
+            ${{ steps.cachekey.outputs.legacy_current_prefix }}
+            ${{ steps.cachekey.outputs.legacy_previous_prefix }}
 
       - name: Configure and build
         shell: pwsh
