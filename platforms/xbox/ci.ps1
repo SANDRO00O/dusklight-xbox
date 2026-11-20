@@ -86,16 +86,23 @@ cargo --version 2>&1
 git --version
 Write-Host '::endgroup::'
 
-# Resolve the exact UWP toolchain once and share the result with CMake and diagnostics.
-# The workflow runs the same resolver before cache restore; this second invocation is deterministic.
-# If discovery fails, keep going without cache and let CMake report the actual build-toolchain error.
+# Use the exact toolchain object produced by the cache-key step. This prevents a second
+# discovery from selecting a different Visual Studio instance or compiler within the same job.
+# For direct local invocation, resolve it here as a fallback.
 $toolchainInfo = $null
-$toolchainInfoScript = 'platforms/xbox/Get-ToolchainInfo.ps1'
 try {
-    if (-not (Test-Path $toolchainInfoScript)) { throw "Toolchain resolver is missing: $toolchainInfoScript" }
-    $toolchainJson = & $toolchainInfoScript -AsJson
-    if (-not $toolchainJson) { throw 'Toolchain resolver returned no data.' }
-    $toolchainInfo = ($toolchainJson -join [Environment]::NewLine) | ConvertFrom-Json
+    if (-not [string]::IsNullOrWhiteSpace($env:XBOX_TOOLCHAIN_JSON)) {
+        $toolchainInfo = $env:XBOX_TOOLCHAIN_JSON | ConvertFrom-Json
+    } else {
+        $toolchainInfoScript = 'platforms/xbox/Get-ToolchainInfo.ps1'
+        if (-not (Test-Path $toolchainInfoScript)) { throw "Toolchain resolver is missing: $toolchainInfoScript" }
+        $toolchainJson = & $toolchainInfoScript -AsJson
+        if (-not $toolchainJson) { throw 'Toolchain resolver returned no data.' }
+        $toolchainInfo = ($toolchainJson -join [Environment]::NewLine) | ConvertFrom-Json
+    }
+    if (-not $toolchainInfo.CMakeGenerator -or -not $toolchainInfo.MsvcToolsetVersion -or -not $toolchainInfo.WindowsSdkVersion) {
+        throw 'Resolved toolchain data is incomplete.'
+    }
     $toolchainInfo | ConvertTo-Json -Compress -Depth 4 | Out-File -FilePath 'vswhere.log' -Encoding utf8
     Write-Host '--- Selected UWP toolchain ---'
     Write-Host ("Visual Studio: {0} | {1}" -f $toolchainInfo.VisualStudioVersion, $toolchainInfo.VisualStudioPath)
