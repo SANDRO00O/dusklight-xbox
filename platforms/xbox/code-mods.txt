@@ -1,0 +1,17 @@
+# Xbox (UWP) build switches for native / code mods. Read at configure time by
+# cmake/toolchains/xbox-uwp-x64.cmake and platforms/xbox/xbox-mods.cmake.
+# Change a value, commit, run the Xbox workflow again.
+#
+# mods = on | off
+#   on : DUSK_ENABLE_CODE_MODS (mod.dll loading, funchook hooks, exported game symbols, symbol manifest).
+#   off: the stock Xbox build without native mods (data/asset mods keep working).
+#   If the build with mods fails, ci.ps1 automatically retries with mods off (see ci.ps1) so a package is
+#   still produced; the failed logs are kept in Assets/mods-failed-*.log.
+#
+# crt = on | off
+#   on : the Visual C++ runtime DLLs of the build machine (vcruntime140, vcruntime140_1, msvcp140*) are put
+#        into the package next to dusklight.exe. Mods built with the normal desktop toolchain import them and
+#        UWP does not provide them (the *_app variants are different DLLs). Experimental.
+#   off: nothing is bundled (only mods linked with a static runtime can load).
+mods = on
+crt = on

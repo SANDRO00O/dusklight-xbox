@@ -24,8 +24,22 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL" CACHE 
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
 # Features that cannot work (or are unnecessary) on a Dev Mode UWP target.
-# Code mods rely on funchook runtime code patching.
-set(DUSK_ENABLE_CODE_MODS OFF CACHE BOOL "" FORCE)
+# Native (code) mods: funchook runtime code patching works in a UWP app because of the codeGeneration
+# capability (VirtualAllocFromApp / VirtualProtectFromApp, see platforms/xbox/PatchFunchookUwp.cmake and
+# xbox_jit_probe.cpp). Switch: platforms/xbox/code-mods.txt ("mods = off" turns them off again); ci.ps1 sets
+# the environment variable DUSK_XBOX_FORCE_MODS_OFF=1 for its automatic retry when the build with mods failed.
+set(_dusk_xbox_mods ON)
+set(_dusk_xbox_mods_cfg "${CMAKE_CURRENT_LIST_DIR}/../../platforms/xbox/code-mods.txt")
+if(EXISTS "${_dusk_xbox_mods_cfg}")
+  file(READ "${_dusk_xbox_mods_cfg}" _dusk_xbox_mods_txt)
+  if(_dusk_xbox_mods_txt MATCHES "(^|\n)[ \t]*mods[ \t]*=[ \t]*off")
+    set(_dusk_xbox_mods OFF)
+  endif()
+endif()
+if("$ENV{DUSK_XBOX_FORCE_MODS_OFF}" STREQUAL "1")
+  set(_dusk_xbox_mods OFF)
+endif()
+set(DUSK_ENABLE_CODE_MODS ${_dusk_xbox_mods} CACHE BOOL "" FORCE)
 set(DUSK_ENABLE_OPUS OFF CACHE BOOL "" FORCE)
 set(BOREALIS_ENABLE_DISCORD OFF CACHE BOOL "" FORCE)
 set(BOREALIS_ENABLE_SENTRY OFF CACHE BOOL "" FORCE)
@@ -68,4 +82,9 @@ set(CMAKE_C_FLAGS_INIT "${CMAKE_C_FLAGS_INIT} /DSQLITE_OS_WINRT=1")
 get_filename_component(_dusk_xbox_project_include "${CMAKE_CURRENT_LIST_DIR}/../../platforms/xbox/xbox-project.cmake" ABSOLUTE)
 if(NOT _dusk_xbox_project_include IN_LIST CMAKE_PROJECT_TOP_LEVEL_INCLUDES)
   list(APPEND CMAKE_PROJECT_TOP_LEVEL_INCLUDES "${_dusk_xbox_project_include}")
+endif()
+# Native mods (funchook for UWP, VC runtime DLLs for desktop-built mods): see platforms/xbox/xbox-mods.cmake.
+get_filename_component(_dusk_xbox_mods_include "${CMAKE_CURRENT_LIST_DIR}/../../platforms/xbox/xbox-mods.cmake" ABSOLUTE)
+if(NOT _dusk_xbox_mods_include IN_LIST CMAKE_PROJECT_TOP_LEVEL_INCLUDES)
+  list(APPEND CMAKE_PROJECT_TOP_LEVEL_INCLUDES "${_dusk_xbox_mods_include}")
 endif()

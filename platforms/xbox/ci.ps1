@@ -7,6 +7,47 @@
 #>
 $ErrorActionPreference = 'Continue'
 
+# --- Native (code) mods: automatic fallback -------------------------------------------------------------
+# platforms/xbox/code-mods.txt turns the native mods on (default). They add CMake steps and compile code that has
+# never been built for UWP before. This script therefore runs itself once as a child process; when that run
+# fails in CONFIGURE or BUILD (see ci-stage.txt, written below) while mods were on, the failed logs are kept as
+# build/xbox-uwp-x64/Assets/mods-failed-*.log and the whole script runs a second time with
+# DUSK_XBOX_FORCE_MODS_OFF=1 (read by the toolchain file) so a package without native mods is still produced.
+if (-not $env:DUSK_XBOX_CI_INNER) {
+    $env:DUSK_XBOX_CI_INNER = '1'
+    $modsWanted = $true
+    $modsCfg = 'platforms/xbox/code-mods.txt'
+    if ((Test-Path $modsCfg) -and ((Get-Content -Raw $modsCfg) -match '(?m)^\s*mods\s*=\s*off')) { $modsWanted = $false }
+    Remove-Item -Force 'ci-stage.txt' -ErrorAction SilentlyContinue
+    Get-ChildItem 'build/xbox-uwp-x64/Assets' -Filter 'mods-failed-*' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+    Remove-Item -Force 'build/xbox-uwp-x64/Assets/NO-NATIVE-MODS.txt' -ErrorAction SilentlyContinue
+    $pwshExe = (Get-Process -Id $PID).Path
+    & $pwshExe -NoProfile -File $PSCommandPath
+    $rc = $LASTEXITCODE
+    if ($rc -ne 0 -and $modsWanted) {
+        $stage = if (Test-Path 'ci-stage.txt') { (Get-Content -Raw 'ci-stage.txt').Trim() } else { '' }
+        if ($stage -eq 'configure' -or $stage -eq 'build') {
+            Write-Host ''
+            Write-Host "::warning::The build WITH native mods failed in stage '$stage'. Retrying WITHOUT native mods so a package is still produced. The failed logs are in Assets/mods-failed-*.log."
+            $keepDir = 'build/xbox-uwp-x64/Assets'
+            New-Item -ItemType Directory -Force -Path $keepDir | Out-Null
+            foreach ($f in 'configure.log', 'build.log', 'patches.log') {
+                if (Test-Path $f) { Copy-Item $f (Join-Path $keepDir ("mods-failed-" + $f)) -Force }
+            }
+            "stage=$stage exit=$rc" | Out-File -FilePath (Join-Path $keepDir 'mods-failed-info.txt') -Encoding ascii
+            $env:DUSK_XBOX_FORCE_MODS_OFF = '1'
+            Remove-Item -Force 'ci-stage.txt' -ErrorAction SilentlyContinue
+            & $pwshExe -NoProfile -File $PSCommandPath
+            $rc = $LASTEXITCODE
+            if ($rc -eq 0) {
+                'This package was built WITHOUT native mods because the build with mods failed (see mods-failed-*.log).' | Out-File -FilePath (Join-Path $keepDir 'NO-NATIVE-MODS.txt') -Encoding ascii
+                Write-Host '::warning::package built WITHOUT native mods (fallback)'
+            }
+        }
+    }
+    exit $rc
+}
+
 $buildDir = 'build/xbox-uwp-x64'
 $toolchain = 'cmake/toolchains/xbox-uwp-x64.cmake'
 $config = 'RelWithDebInfo'
@@ -93,6 +134,13 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
+# --- CMakeLists.txt: skip the in-tree mods on Xbox (native mods: code-mods.txt, PatchFunchookUwp.cmake) ---
+./platforms/xbox/Apply-Patches-Mods.ps1 2>&1 | Tee-Object -FilePath patches.log -Append
+if ($LASTEXITCODE -ne 0) {
+    Write-Host '################ MODS PATCHING FAILED: an anchor in CMakeLists.txt did not match (see patches.log) ################'
+    exit 1
+}
+
 # --- Symbol table placeholder + stale linker map ---
 # xbox-project.cmake packages <build>/dusklight.sym as symbols/dusklight.sym (function names for the stack
 # traces in crash-diag.log). It always starts as a placeholder so a table of an older build can never be
@@ -109,6 +157,7 @@ Remove-Item -Force $mapFile -ErrorAction SilentlyContinue
 # The -D arguments are quoted so PowerShell does not split them at dots.
 # FETCHCONTENT_SOURCE_DIR_SDL makes Aurora's FetchContent_Declare(SDL ...) use the fork instead of
 # downloading upstream SDL (this also skips Aurora's Android-only patch commands).
+'configure' | Out-File -FilePath 'ci-stage.txt' -Encoding ascii
 Write-Host "Configuring: cmake -S . -B $buildDir -A x64 -DCMAKE_TOOLCHAIN_FILE=$toolchain -DFETCHCONTENT_SOURCE_DIR_SDL=$sdlUwpDir"
 $sw = [Diagnostics.Stopwatch]::StartNew()
 cmake -S . -B $buildDir -A x64 "-DCMAKE_TOOLCHAIN_FILE=$toolchain" "-DFETCHCONTENT_SOURCE_DIR_SDL=$sdlUwpDir" 2>&1 | Tee-Object -FilePath configure.log | Out-Null
@@ -141,6 +190,7 @@ try {
 # --- Build ---
 # MSBuild keeps going past a failing project, so one run reports every independent error.
 $sw.Restart()
+'build' | Out-File -FilePath 'ci-stage.txt' -Encoding ascii
 cmake --build $buildDir --config $config --target dusklight 2>&1 | Tee-Object -FilePath build.log | Out-Null
 $buildExit = $LASTEXITCODE
 Write-Host ('Build took {0:N0}s' -f $sw.Elapsed.TotalSeconds)
@@ -149,6 +199,7 @@ if ($buildExit -ne 0) {
     exit $buildExit
 }
 Write-Host 'Build succeeded'
+'post' | Out-File -FilePath 'ci-stage.txt' -Encoding ascii
 
 # --- Symbol table for crash / hang stack traces, then repackage ---
 # Everything in this block is best effort: when it fails the first package (placeholder symbol table) stays.
@@ -237,6 +288,43 @@ if ((Test-Path $exe) -and (Test-Path $vswhere)) {
     } else {
         Write-Host '::warning::dumpbin.exe not found, imports.log skipped'
     }
+}
+
+# --- Native mods: what ended up in the build and the package? (Assets/mods-build.log) ---
+# Best effort. Shows whether native mods were compiled in, the size of the exported symbol list, and whether the
+# dusklight.exe inside the .msix is the one the post-link step embedded the symbol manifest into (same size as
+# the built exe) and whether the VC runtime DLLs for desktop-built mods are in the package.
+try {
+    $modsLog = Join-Path $assetsDir 'mods-build.log'
+    $lines = @()
+    $lines += "FORCE_MODS_OFF=$($env:DUSK_XBOX_FORCE_MODS_OFF)"
+    $cache = Join-Path $buildDir 'CMakeCache.txt'
+    if (Test-Path $cache) { $lines += (Select-String -Path $cache -Pattern '^(DUSK_ENABLE_CODE_MODS|DUSK_HAS_FUNCHOOK):' | ForEach-Object { $_.Line }) }
+    foreach ($def in (Get-ChildItem -Path $buildDir -Recurse -Filter 'dusklight_exports.def' -ErrorAction SilentlyContinue)) {
+        $n = (Get-Content $def.FullName | Measure-Object -Line).Lines
+        $lines += ("exports def: {0} ({1:N0} lines)" -f $def.FullName, $n)
+    }
+    foreach ($lib in (Get-ChildItem -Path $buildDir -Recurse -Filter 'dusklight_imports.lib' -ErrorAction SilentlyContinue)) {
+        $lines += ("import library: {0} ({1:N0} bytes)" -f $lib.FullName, $lib.Length)
+    }
+    if (Test-Path $exe) { $lines += ("built exe: {0:N0} bytes" -f (Get-Item $exe).Length) }
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    Get-ChildItem -Path (Join-Path $buildDir 'AppPackages') -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in '.msix', '.appx' } | ForEach-Object {
+        $zip = [System.IO.Compression.ZipFile]::OpenRead($_.FullName)
+        try {
+            $e = $zip.Entries | Where-Object { $_.FullName -ieq 'dusklight.exe' } | Select-Object -First 1
+            if ($e) { $lines += ("{0}: dusklight.exe in package = {1:N0} bytes" -f $_.Name, $e.Length) }
+            foreach ($d in 'vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll') {
+                $has = [bool]($zip.Entries | Where-Object { $_.FullName -ieq $d })
+                $lines += ("{0}: {1} in package: {2}" -f $_.Name, $d, $has)
+            }
+        } finally { $zip.Dispose() }
+    }
+    $lines | Out-File -FilePath $modsLog -Encoding ascii
+    Write-Host '--- native mods build info ---'
+    $lines | ForEach-Object { '  ' + $_ }
+} catch {
+    Write-Host "::warning::mods build info failed: $_"
 }
 
 # --- Collect the AppX/MSIX package CMake's WindowsStore support produced ---
