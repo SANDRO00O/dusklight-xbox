@@ -86,7 +86,7 @@ jobs:
         run: ./platforms/xbox/ci.ps1
 
       - name: Save build cache
-        if: ${{ !cancelled() && steps.cachekey.outputs.cacheable == 'true' }}
+        if: ${{ success() && steps.cachekey.outputs.cacheable == 'true' }}
         uses: actions/cache/save@v4
         with:
           path: |
