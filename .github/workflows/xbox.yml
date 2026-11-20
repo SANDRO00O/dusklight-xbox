@@ -7,8 +7,7 @@ name: Xbox (experimental)
 # Build cache: build/xbox-uwp-x64 (MSBuild objects, Rust target dir), build/ext (SDL3-uwp clone) and
 # the cargo registry are restored from actions/cache and saved after every run, even a failed one.
 # platforms/xbox/Cache-Mtimes.ps1 fixes file mtimes so MSBuild only rebuilds what changed.
-# The first run after adding this is a normal cold build. Use the no_cache input for a clean build
-# (it also replaces the saved cache), or bump CACHE_VERSION to drop every old cache.
+# Use the no_cache input for a clean build, or bump CACHE_VERSION to drop every old cache.
 #
 # Artifacts: xbox-uwp-logs (logs + the installable package, small) and xbox-uwp-symbols (the large
 # *.appxsym debug symbols, only needed to decode crash addresses).
@@ -43,7 +42,7 @@ jobs:
       # Key by compatibility boundaries, not the hosted-image patch number. VS/MSVC servicing
       # updates within the same generator and MSVC ABI can reuse the existing object files.
       # The exact SDK is included; CMake is keyed by major version. Cargo fingerprints rustc
-      # itself, so a stable Rust update only rebuilds Rust outputs instead of dropping the C++ cache.
+      # itself, so a stable Rust update rebuilds Rust outputs without discarding the C++ cache.
       - name: Compute cache key
         id: cachekey
         shell: pwsh
@@ -58,66 +57,7 @@ jobs:
 
           $msvcRoot = Join-Path $vsPath 'VC\Tools\MSVC'
           $msvcVersion = Get-ChildItem -Path $msvcRoot -Directory -ErrorAction Stop |
-            Where-Object { $_.Name -match '^\d+\.\d+\.\d+
-
-      - name: Restore build cache
-        if: ${{ !inputs.no_cache }}
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            build/xbox-uwp-x64
-            build/ext
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ steps.cachekey.outputs.prefix }}${{ github.run_id }}
-          restore-keys: |
-            ${{ steps.cachekey.outputs.prefix }}
-            ${{ steps.cachekey.outputs.legacy_prefix }}
-
-      - name: Configure and build
-        shell: pwsh
-        run: ./platforms/xbox/ci.ps1
-
-      - name: Save build cache
-        if: ${{ !cancelled() }}
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            build/xbox-uwp-x64
-            build/ext
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ steps.cachekey.outputs.prefix }}${{ github.run_id }}
-
-      # Logs and the installable package, WITHOUT the big debug symbols (they go to the next step).
-      - name: Upload logs
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: xbox-uwp-logs
-          path: |
-            configure.log
-            build.log
-            patches.log
-            cache-restore.log
-            sdl-clone.log
-            vswhere.log
-            build/xbox-uwp-x64/CMakeFiles/CMakeConfigureLog.yaml
-            build/xbox-uwp-x64/Assets/
-            !**/*.appxsym
-          if-no-files-found: ignore
-
-      # Debug symbols (*.appxsym is already a zip, so no extra compression). Download this artifact
-      # only when a crash address has to be decoded.
-      - name: Upload symbols
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: xbox-uwp-symbols
-          path: build/xbox-uwp-x64/Assets/_package/**/*.appxsym
-          compression-level: 0
-          if-no-files-found: ignore
- } |
+            Where-Object { $_.Name -match '^\d+\.\d+\.\d+$' } |
             Sort-Object { [version]$_.Name } -Descending |
             Select-Object -First 1
           if (-not $msvcVersion) { throw "No MSVC toolset found under $msvcRoot" }
@@ -125,65 +65,7 @@ jobs:
 
           $sdkRoot = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\Include'
           $sdkVersion = Get-ChildItem -Path $sdkRoot -Directory -ErrorAction Stop |
-            Where-Object { $_.Name -match '^10\.0\.\d+\.\d+
-
-      - name: Restore build cache
-        if: ${{ !inputs.no_cache }}
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            build/xbox-uwp-x64
-            build/ext
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ steps.cachekey.outputs.prefix }}${{ github.run_id }}
-          restore-keys: |
-            ${{ steps.cachekey.outputs.prefix }}
-
-      - name: Configure and build
-        shell: pwsh
-        run: ./platforms/xbox/ci.ps1
-
-      - name: Save build cache
-        if: ${{ !cancelled() }}
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            build/xbox-uwp-x64
-            build/ext
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ steps.cachekey.outputs.prefix }}${{ github.run_id }}
-
-      # Logs and the installable package, WITHOUT the big debug symbols (they go to the next step).
-      - name: Upload logs
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: xbox-uwp-logs
-          path: |
-            configure.log
-            build.log
-            patches.log
-            cache-restore.log
-            sdl-clone.log
-            vswhere.log
-            build/xbox-uwp-x64/CMakeFiles/CMakeConfigureLog.yaml
-            build/xbox-uwp-x64/Assets/
-            !**/*.appxsym
-          if-no-files-found: ignore
-
-      # Debug symbols (*.appxsym is already a zip, so no extra compression). Download this artifact
-      # only when a crash address has to be decoded.
-      - name: Upload symbols
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: xbox-uwp-symbols
-          path: build/xbox-uwp-x64/Assets/_package/**/*.appxsym
-          compression-level: 0
-          if-no-files-found: ignore
- -and (Test-Path (Join-Path $_.FullName 'um')) } |
+            Where-Object { $_.Name -match '^10\.0\.\d+\.\d+$' -and (Test-Path (Join-Path $_.FullName 'um')) } |
             Sort-Object { [version]$_.Name } -Descending |
             Select-Object -First 1
           if (-not $sdkVersion) { throw "No Windows 10/11 SDK found under $sdkRoot" }
@@ -195,7 +77,7 @@ jobs:
           $prefix = "xbox-uwp-$($env:CACHE_VERSION)-vs$vsMajor-msvc$msvcAbiMajor-sdk$($sdkVersion.Name)-cmake$cmakeMajor-"
           "prefix=$prefix" >> $env:GITHUB_OUTPUT
 
-          # Migration bridge for the last known-good cache (run #37). Only allow it while
+          # One-time bridge to the last known-good cache (run #37). Only allow it while
           # the same VS/ABI/SDK/CMake compatibility family is present.
           if ($vsMajor -eq '18' -and $msvcAbiMajor -eq '14' -and $sdkVersion.Name -eq '10.0.26100.0' -and $cmakeMajor -eq '4') {
             'legacy_prefix=xbox-uwp-v1-20261103.298.1-' >> $env:GITHUB_OUTPUT
@@ -217,6 +99,7 @@ jobs:
           key: ${{ steps.cachekey.outputs.prefix }}${{ github.run_id }}
           restore-keys: |
             ${{ steps.cachekey.outputs.prefix }}
+            ${{ steps.cachekey.outputs.legacy_prefix }}
 
       - name: Configure and build
         shell: pwsh
