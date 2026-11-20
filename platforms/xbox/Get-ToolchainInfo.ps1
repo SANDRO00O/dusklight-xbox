@@ -177,19 +177,13 @@ $cacheVersion = if ($env:CACHE_VERSION) { $env:CACHE_VERSION } else { 'v2' }
 # instead select a new cache namespace.
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $cacheConfigFiles = @(
-    (Join-Path $PSScriptRoot 'Get-ToolchainInfo.ps1'),
-    (Join-Path $PSScriptRoot 'ci.ps1'),
-    (Join-Path $PSScriptRoot 'Cache-Mtimes.ps1'),
-    (Join-Path $PSScriptRoot 'code-mods.txt'),
-    (Join-Path $PSScriptRoot 'xbox-project.cmake'),
-    (Join-Path $PSScriptRoot 'xbox-mods.cmake'),
-    (Join-Path $repoRoot 'cmake/toolchains/xbox-uwp-x64.cmake')
-)
-$cacheConfigFiles += @(
-    Get-ChildItem -LiteralPath $PSScriptRoot -File -Filter 'Apply-Patches*.ps1' |
+    Get-ChildItem -LiteralPath $PSScriptRoot -File |
+        Where-Object { $_.Extension -in @('.ps1', '.cmake', '.txt', '.in', '.workflow') } |
         Sort-Object Name |
         ForEach-Object { $_.FullName }
 )
+$cacheConfigFiles += (Join-Path $repoRoot 'cmake/toolchains/xbox-uwp-x64.cmake')
+$cacheConfigFiles += (Join-Path $repoRoot '.github/workflows/xbox.yml')
 $cacheConfigHashes = @()
 foreach ($configFile in $cacheConfigFiles) {
     if (-not (Test-Path -LiteralPath $configFile)) {
