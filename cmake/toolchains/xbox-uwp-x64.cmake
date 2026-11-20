@@ -5,9 +5,10 @@
 #
 # Usage (see platforms/xbox/ci.ps1, which also fetches SDL3-uwp and patches the submodules):
 #   ./platforms/xbox/Apply-Patches.ps1
-#   cmake -S . -B build/xbox-uwp-x64 -A x64 "-DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/xbox-uwp-x64.cmake" "-DFETCHCONTENT_SOURCE_DIR_SDL=<path to SDL3-uwp clone>"
+#   platforms/xbox/ci.ps1 resolves a UWP-capable VS instance and pins the CMake generator,
+#   generator instance, MSVC toolset and Windows SDK before configuring the build directory.
 #   cmake --build build/xbox-uwp-x64 --config RelWithDebInfo --target dusklight
-# (no -G: CMake picks the newest installed Visual Studio; quote the -D arguments in PowerShell)
+# Do not reuse a build directory after changing its generator, instance, toolset or SDK.
 #
 # STATUS: scaffolding only. See docs/xbox-port.md for the known blockers.
 
