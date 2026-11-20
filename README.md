@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="res/logo.png" alt="Logo" width="640">
+  <img src="res/dusklight_for_xbox.png" alt="Logo" width="640">
 
   <p align="center">
     <a href="https://twilitrealm.dev">Official Website</a>
