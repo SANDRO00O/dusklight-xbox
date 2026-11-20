@@ -171,6 +171,35 @@ if ($sdlCommit -notmatch '^[0-9a-f]{40}$') {
 }
 
 $cacheVersion = if ($env:CACHE_VERSION) { $env:CACHE_VERSION } else { 'v2' }
+
+# Cache only the outputs produced by the exact configuration logic that created them. Source-code
+# edits are handled incrementally by Cache-Mtimes.ps1; changes to the build/cache/patch logic must
+# instead select a new cache namespace.
+$repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$cacheConfigFiles = @(
+    (Join-Path $PSScriptRoot 'Get-ToolchainInfo.ps1'),
+    (Join-Path $PSScriptRoot 'ci.ps1'),
+    (Join-Path $PSScriptRoot 'Cache-Mtimes.ps1'),
+    (Join-Path $PSScriptRoot 'code-mods.txt'),
+    (Join-Path $PSScriptRoot 'xbox-project.cmake'),
+    (Join-Path $PSScriptRoot 'xbox-mods.cmake'),
+    (Join-Path $repoRoot 'cmake/toolchains/xbox-uwp-x64.cmake')
+)
+$cacheConfigFiles += @(
+    Get-ChildItem -LiteralPath $PSScriptRoot -File -Filter 'Apply-Patches*.ps1' |
+        Sort-Object Name |
+        ForEach-Object { $_.FullName }
+)
+$cacheConfigHashes = @()
+foreach ($configFile in $cacheConfigFiles) {
+    if (-not (Test-Path -LiteralPath $configFile)) {
+        throw ("Cache configuration input is missing: " + $configFile)
+    }
+    $relativePath = $configFile.Substring($repoRoot.Length).TrimStart('\', '/').Replace('\', '/')
+    $configHash = (Get-FileHash -LiteralPath $configFile -Algorithm SHA256).Hash.ToLowerInvariant()
+    $cacheConfigHashes += ("config:" + $relativePath + "=" + $configHash)
+}
+
 $signatureParts = @(
     "cache=$cacheVersion",
     'target=windowsstore-x64',
@@ -185,7 +214,7 @@ $signatureParts = @(
     "rust=$rustVersion",
     "sdl3-uwp=$sdlCommit",
     'configuration=RelWithDebInfo'
-)
+) + $cacheConfigHashes
 $signature = $signatureParts -join [Environment]::NewLine
 $signatureBytes = [Text.Encoding]::UTF8.GetBytes($signature)
 $sha256 = [Security.Cryptography.SHA256]::HashData($signatureBytes)
