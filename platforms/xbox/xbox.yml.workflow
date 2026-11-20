@@ -2,13 +2,13 @@ name: Xbox (experimental)
 
 # Manual only. All build logic lives in platforms/xbox/ci.ps1 so it can change without touching
 # this file. See docs/xbox-port.md.
-# Copy this file to .github/workflows/xbox.yml to enable it.
+# This template is kept in sync with .github/workflows/xbox.yml.
 #
-# Build cache: build/xbox-uwp-x64 (MSBuild objects, Rust target dir), build/ext (SDL3-uwp clone) and
-# the cargo registry are restored from actions/cache and saved after every run, even a failed one.
-# platforms/xbox/Cache-Mtimes.ps1 fixes file mtimes so MSBuild only rebuilds what changed.
-# The first run after adding this is a normal cold build. Use the no_cache input for a clean build
-# (it also replaces the saved cache), or bump CACHE_VERSION to drop every old cache.
+# The cache key fingerprints the exact VS instance, MSVC toolset, Windows SDK, CMake, Rust,
+# target, and pinned SDL3-UWP commit selected by Get-ToolchainInfo.ps1.
+# If toolchain discovery fails, caching is disabled for that run; the build itself still runs.
+# Cache-Mtimes.ps1 restores source timestamps so unchanged MSBuild objects remain reusable.
+# Use no_cache for a clean build, or bump CACHE_VERSION when cache semantics change.
 #
 # Artifacts: xbox-uwp-logs (logs + the installable package, small) and xbox-uwp-symbols (the large
 # *.appxsym debug symbols, only needed to decode crash addresses).
@@ -21,7 +21,7 @@ on:
         default: false
 
 env:
-  CACHE_VERSION: v1
+  CACHE_VERSION: v2
 
 jobs:
   build-xbox-uwp:
@@ -40,17 +40,39 @@ jobs:
           rustup toolchain install stable
           rustup target add x86_64-pc-windows-msvc
 
-      # The runner image version changes the Visual Studio / MSVC / SDK versions, so it is part of
-      # the cache key: a new image starts from a clean cache instead of mixing toolchains.
+      # Resolve the exact toolchain once. A discovery failure disables caching for this run,
+      # but does not prevent the actual build step from running.
       - name: Compute cache key
         id: cachekey
         shell: pwsh
         run: |
-          $image = if ($env:ImageVersion) { $env:ImageVersion } else { 'unknown' }
-          "prefix=xbox-uwp-$($env:CACHE_VERSION)-$image-" >> $env:GITHUB_OUTPUT
+          $ErrorActionPreference = 'Stop'
+          try {
+            $toolchainJson = & ./platforms/xbox/Get-ToolchainInfo.ps1 -AsJson
+            if (-not $toolchainJson) { throw 'Toolchain resolver returned no data.' }
+            $toolchainJsonText = $toolchainJson -join [Environment]::NewLine
+            $toolchain = $toolchainJsonText | ConvertFrom-Json
+            if (-not $toolchain.CachePrefix) { throw 'Toolchain resolver returned no cache fingerprint.' }
+
+            $toolchainJsonCompact = $toolchain | ConvertTo-Json -Compress -Depth 4
+            "toolchain_json=$toolchainJsonCompact" >> $env:GITHUB_OUTPUT
+            "cacheable=true" >> $env:GITHUB_OUTPUT
+            "prefix=$($toolchain.CachePrefix)" >> $env:GITHUB_OUTPUT
+            Write-Host "Cache fingerprint: $($toolchain.CacheFingerprint)"
+            Write-Host "Generator: $($toolchain.CMakeGenerator)"
+            Write-Host "Visual Studio: $($toolchain.VisualStudioVersion) ($($toolchain.VisualStudioPath))"
+            Write-Host "MSVC: $($toolchain.MsvcToolsetName) $($toolchain.MsvcToolsetVersion)"
+            Write-Host "Windows SDK: $($toolchain.WindowsSdkVersion)"
+            Write-Host "CMake: $($toolchain.CMakeVersion); Rust: $($toolchain.RustVersion)"
+            Write-Host "Pinned SDL3-UWP: $($toolchain.Sdl3UwpCommit)"
+          } catch {
+            Write-Warning "Toolchain fingerprinting failed; this run will build without restoring or saving a cache. $($_.Exception.Message)"
+            "cacheable=false" >> $env:GITHUB_OUTPUT
+            "prefix=xbox-uwp-uncacheable-$env:GITHUB_RUN_ID-" >> $env:GITHUB_OUTPUT
+          }
 
       - name: Restore build cache
-        if: ${{ !inputs.no_cache }}
+        if: ${{ !inputs.no_cache && steps.cachekey.outputs.cacheable == 'true' }}
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -64,10 +86,12 @@ jobs:
 
       - name: Configure and build
         shell: pwsh
+        env:
+          XBOX_TOOLCHAIN_JSON: ${{ steps.cachekey.outputs.toolchain_json }}
         run: ./platforms/xbox/ci.ps1
 
       - name: Save build cache
-        if: ${{ !cancelled() }}
+        if: ${{ success() && steps.cachekey.outputs.cacheable == 'true' }}
         uses: actions/cache/save@v4
         with:
           path: |
