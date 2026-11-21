@@ -22,11 +22,11 @@
                                   settings saved with the heavy values (DoF Dusk, bloom Dusk, shadows > x1) are
                                   switched to the light ones, so the fix also reaches a config that already exists.
                                   Everything stays changeable in Settings > Graphics afterwards.
-                              (b) perf-diag.log in the log folder: one line for every second in which the framerate
-                                  was well below the best seen so far or a frame took over 100 ms, with stage, room,
-                                  camera position and direction, draw call counts, pipelines still compiling and
-                                  the DoF / bloom work done in that second. This shows which effect or which view
-                                  is responsible if the drops remain.
+                              (b) perf-diag.log in the log folder: one line per second (capped at 4000 lines) with
+                                  fps, worst frame, stage, room, camera position and direction, draw call counts,
+                                  pipelines still compiling, the DoF / bloom work done in that second and the render
+                                  resolution (res=WxH, scale=internal resolution setting). This shows which effect,
+                                  which view or which resolution is responsible if the drops remain.
 
   Idempotent. Exits 1 when an anchor does not match exactly once.
   Patched files must be listed in $alwaysFresh of Cache-Mtimes.ps1.
@@ -153,6 +153,7 @@ Patch-Perf 'src/m_Do/m_Do_graphic.cpp' @(
 # --- 4. m_Do_main.cpp: one-time profile + performance log ---------------------------------------------
 $mainFuncs = @'
 #include <aurora/aurora.h>
+#include <dolphin/gx/GXAurora.h>
 
 // dusk_xbox_perf: see platforms/xbox/Apply-Patches-Perf.ps1.
 #include "d/d_camera.h"
@@ -198,8 +199,7 @@ static void dusk_xbox_perf_profile() {
     }
 }
 
-// perf-diag.log: one line per second in which the framerate was well below the best seen so far,
-// or a frame took over 100 ms.
+// perf-diag.log: one line per second (capped, see below).
 static void dusk_xbox_perf_tick() {
     using clock = std::chrono::steady_clock;
     static const clock::time_point start = clock::now();
@@ -238,7 +238,9 @@ static void dusk_xbox_perf_tick() {
         peakFps = fps;
     }
 
-    if (linesWritten >= 4000 || !(fps < peakFps * 0.8 || worst > 100.0)) {
+    // every second (the lines carry res/scale, so a change of the internal resolution can be compared);
+    // capped at 4000 lines (about 1 MB, over an hour of play).
+    if (linesWritten >= 4000) {
         return;
     }
     std::ofstream out(dusk::CachePath / "perf-diag.log", std::ios::app);
@@ -277,12 +279,16 @@ static void dusk_xbox_perf_tick() {
         pitch = std::atan2(dy, std::sqrt(dx * dx + dz * dz)) * 57.29578f;
     }
     const AuroraStats* stats = aurora_get_stats();
+    u32 renderW = 0;
+    u32 renderH = 0;
+    AuroraGetRenderSize(&renderW, &renderH);
     std::snprintf(line, sizeof(line),
         "t=%.0f fps=%.1f worst=%.0fms stage=%s room=%d eye=(%.0f,%.0f,%.0f) dir=(%.0f,%.0f) draws=%u merged=%u "
-        "pipesQueued=%u pipesCreated=%u uploadKB=%u dofBlur=%d bloom=%d\n",
+        "pipesQueued=%u pipesCreated=%u uploadKB=%u dofBlur=%d bloom=%d res=%ux%u scale=%d\n",
         t, fps, worst, dComIfGp_getStartStageName(), static_cast<int>(dComIfGp_roomControl_getStayNo()), ex, ey, ez,
         yaw, pitch, stats->drawCallCount, stats->mergedDrawCallCount, stats->queuedPipelines,
-        stats->createdPipelines, stats->lastTextureUploadSize / 1024u, dof, bloom);
+        stats->createdPipelines, stats->lastTextureUploadSize / 1024u, dof, bloom, renderW, renderH,
+        static_cast<int>(dusk::getSettings().game.internalResolutionScale.getValue()));
     out << line;
     ++linesWritten;
 }
