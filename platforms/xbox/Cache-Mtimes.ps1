@@ -61,7 +61,8 @@ foreach ($p in @(
     'src/dusk/ui/preset.cpp',                # Dusk preset on UWP (Apply-Patches-Perf.ps1)
     'src/m_Do/m_Do_graphic.cpp',             # DoF / bloom counters (Apply-Patches-Perf.ps1)
     'src/dusk/mods/loader/loader.cpp',       # weakly_canonical -> lexical on UWP (Apply-Patches-ModInstall.ps1)
-    'src/dusk/mods/loader/bundle_disk.cpp'   # fs::relative -> lexically_relative on UWP (Apply-Patches-ModInstall.ps1)
+    'src/dusk/mods/loader/bundle_disk.cpp',  # fs::relative -> lexically_relative on UWP (Apply-Patches-ModInstall.ps1)
+    'src/dusk/mods/loader/native_module.cpp' # import diagnostic when mod.dll fails to load (Apply-Patches-NativeDiag.ps1)
 )) { [void]$alwaysFresh.Add($p) }
 
 # One-off: the first cached build (workflow run 117453502716, commit below) wrote an empty stamp
