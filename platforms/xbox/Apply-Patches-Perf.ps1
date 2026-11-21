@@ -25,8 +25,10 @@
                               (b) perf-diag.log in the log folder: one line per second (capped at 4000 lines) with
                                   fps, worst frame, stage, room, camera position and direction, draw call counts,
                                   pipelines still compiling, the DoF / bloom work done in that second and the render
-                                  resolution (res=WxH, scale=internal resolution setting). This shows which effect,
-                                  which view or which resolution is responsible if the drops remain.
+                                  resolution (res=WxH, scale=internal resolution setting), plus uiMs / endMs: the average
+                                  ms per frame spent in ui::update() and in aurora_end_frame() (menus, windows). The
+                                  launcher loop writes lines too. This shows which effect, which view, which
+                                  resolution or which window is responsible if the drops remain.
 
   Idempotent. Exits 1 when an anchor does not match exactly once.
   Patched files must be listed in $alwaysFresh of Cache-Mtimes.ps1.
@@ -168,6 +170,18 @@ $mainFuncs = @'
 extern int g_duskPerfDofBlur;
 extern int g_duskPerfBloom;
 
+// Milliseconds spent in dusk::ui::update() and in aurora_end_frame() (RmlUi recording, submit, present).
+static double g_duskPerfUiMs = 0.0;
+static double g_duskPerfEndMs = 0.0;
+struct DuskPerfTimer {
+    double& acc;
+    std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+    explicit DuskPerfTimer(double& a) : acc(a) {}
+    ~DuskPerfTimer() {
+        acc += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    }
+};
+
 // Once per install: a config that already holds the heavy Dusk effects gets the light ones.
 static void dusk_xbox_perf_profile() {
     std::error_code ec;
@@ -226,6 +240,10 @@ static void dusk_xbox_perf_tick() {
     }
 
     const double fps = frames * 1000.0 / winMs;
+    const double uiAvg = g_duskPerfUiMs / frames;
+    const double endAvg = g_duskPerfEndMs / frames;
+    g_duskPerfUiMs = 0.0;
+    g_duskPerfEndMs = 0.0;
     const int dof = g_duskPerfDofBlur - dofBase;
     const int bloom = g_duskPerfBloom - bloomBase;
     const double worst = worstMs;
@@ -261,7 +279,8 @@ static void dusk_xbox_perf_tick() {
             static_cast<int>(game.disableWaterRefraction.getValue()),
             static_cast<int>(dusk::getSettings().video.maxFrameRate.getValue()));
         out << line;
-        out << "# t = seconds since start; dir = camera yaw/pitch in degrees; dofBlur/bloom = passes drawn in that second\n";
+        out << "# t = seconds since start; dir = camera yaw/pitch in degrees; dofBlur/bloom = passes drawn in that second;\n"
+            << "# uiMs = average ms per frame in ui::update(); endMs = average ms per frame in aurora_end_frame() (menus: RmlUi drawing, submit, present)\n";
     }
     const double t = std::chrono::duration<double>(now - start).count();
     float ex = 0.0f, ey = 0.0f, ez = 0.0f, yaw = 0.0f, pitch = 0.0f;
@@ -284,11 +303,11 @@ static void dusk_xbox_perf_tick() {
     AuroraGetRenderSize(&renderW, &renderH);
     std::snprintf(line, sizeof(line),
         "t=%.0f fps=%.1f worst=%.0fms stage=%s room=%d eye=(%.0f,%.0f,%.0f) dir=(%.0f,%.0f) draws=%u merged=%u "
-        "pipesQueued=%u pipesCreated=%u uploadKB=%u dofBlur=%d bloom=%d res=%ux%u scale=%d\n",
+        "pipesQueued=%u pipesCreated=%u uploadKB=%u dofBlur=%d bloom=%d res=%ux%u scale=%d uiMs=%.1f endMs=%.1f\n",
         t, fps, worst, dComIfGp_getStartStageName(), static_cast<int>(dComIfGp_roomControl_getStayNo()), ex, ey, ez,
         yaw, pitch, stats->drawCallCount, stats->mergedDrawCallCount, stats->queuedPipelines,
         stats->createdPipelines, stats->lastTextureUploadSize / 1024u, dof, bloom, renderW, renderH,
-        static_cast<int>(dusk::getSettings().game.internalResolutionScale.getValue()));
+        static_cast<int>(dusk::getSettings().game.internalResolutionScale.getValue()), uiAvg, endAvg);
     out << line;
     ++linesWritten;
 }
@@ -298,10 +317,29 @@ $mainCall = @'
     dusk_xbox_perf_profile();
 '@
 $mainTick = @'
-        aurora_end_frame();
+        {
+            DuskPerfTimer perfEndTimer{g_duskPerfEndMs};
+            aurora_end_frame();
+        }
         dusk_xbox_perf_tick();
 
         FrameMark;
+'@
+$uiCall = @'
+        {
+            DuskPerfTimer perfUiTimer{g_duskPerfUiMs};
+            dusk::ui::update();
+        }
+'@
+# The launcher loop (before the game starts) has its own frame loop: the menus are also measured there.
+$launchTick = @'
+        dusk::g_imguiConsole.PostDraw();
+
+        {
+            DuskPerfTimer perfEndTimer{g_duskPerfEndMs};
+            aurora_end_frame();
+        }
+        dusk_xbox_perf_tick();
 '@
 Patch-Perf 'src/m_Do/m_Do_main.cpp' @(
     @{ Pattern = '(?m)^#include <aurora/aurora\.h>(?=\r?$)';
@@ -309,7 +347,11 @@ Patch-Perf 'src/m_Do/m_Do_main.cpp' @(
     @{ Pattern = '(?m)^    dusk::applyResampler\(dusk::getSettings\(\)\.game\.resampler\.getValue\(\)\);(?=\r?$)';
        Replacement = $mainCall.TrimEnd(); Expected = 1 },
     @{ Pattern = '(?m)^        aurora_end_frame\(\);\r?\n\r?\n        FrameMark;';
-       Replacement = $mainTick.TrimEnd(); Expected = 1 }
+       Replacement = $mainTick.TrimEnd(); Expected = 1 },
+    @{ Pattern = '(?m)^        dusk::ui::update\(\);(?=\r?$)';
+       Replacement = $uiCall.TrimEnd(); Expected = 2 },
+    @{ Pattern = '(?m)^        dusk::g_imguiConsole\.PostDraw\(\);\r?\n\r?\n        aurora_end_frame\(\);';
+       Replacement = $launchTick.TrimEnd(); Expected = 1 }
 )
 
 if ($script:failed) { exit 1 }

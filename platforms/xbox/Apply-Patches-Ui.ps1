@@ -13,7 +13,15 @@
       mod_browser.rcss
 
   The windows lose their frosted-glass look; the background colour is already 90% opaque, so they stay
-  readable. NOT measured on hardware yet. Best effort: a stylesheet that changed upstream only prints a
+  readable.
+
+  Also (reported: scrolling the mods list is very slow, the fps overlay reads 3; cause not measured yet, these are
+  the likely suspects):
+    * mods.rcss: the animated gradient `transition` on the mod rows is removed
+    * mod_browser.rcss: catalog cards lose `overflow: hidden` + the 12dp radius (a rounded clip makes RmlUi write
+      a stencil clip mask per card and per frame); the cards get a 4dp radius and no clipping
+
+  NOT measured on hardware yet. Best effort: a stylesheet that changed upstream only prints a
   warning and keeps its effects, the build never fails because of this script.
 
   Idempotent (a removed blur no longer matches). res/ files are packaged by xbox-project.cmake.
@@ -36,7 +44,12 @@ $edits = @(
     @{ File = '*';                Rx = '(?m)^(\s*)backdrop-filter: blur\([^)]*\);(?=\r?$)';                                         To = '$1' + $note },
     @{ File = 'window.rcss';      Rx = '(?m)^(\s*)box-shadow: 0 0 25dp 5dp;(?=\r?$)';                                               To = '$1box-shadow: none; ' + $note },
     @{ File = 'popover.rcss';     Rx = '(?m)^(\s*)box-shadow: 0 6dp 24dp 2dp rgba\(var\(--color-black-rgb\), 55%\);(?=\r?$)';        To = '$1box-shadow: none; ' + $note },
-    @{ File = 'mod_browser.rcss'; Rx = '(?m)^(\s*)box-shadow: rgba\(var\(--color-black-rgb\), (?:60|65)%\) 0 (?:6|8)dp (?:16|20)dp;(?=\r?$)'; To = '$1box-shadow: none; ' + $note }
+    @{ File = 'mod_browser.rcss'; Rx = '(?m)^(\s*)box-shadow: rgba\(var\(--color-black-rgb\), (?:60|65)%\) 0 (?:6|8)dp (?:16|20)dp;(?=\r?$)'; To = '$1box-shadow: none; ' + $note },
+    # Mods list: no animated gradient on the rows (every focus / hover change re-animates the decorator).
+    @{ File = 'mods.rcss';        Rx = '(?m)^(\s*)transition: decorator 0\.1s linear-in-out;(?=\r?$)';                                To = '$1transition: none; ' + $note },
+    # Mod catalog cards: `overflow: hidden` together with `border-radius` makes RmlUi write a stencil clip mask
+    # (two full-window quads) for every card on every frame. Square-ish corners and no clipping instead.
+    @{ File = 'mod_browser.rcss'; Rx = '(?m)^(\s*)overflow: hidden;(\r?\n\s*text-align: left;\r?\n\s*)border-radius: 12dp;(?=\r?$)'; To = '${1}overflow: visible;${2}border-radius: 4dp; ' + $note }
 )
 
 $total = 0
