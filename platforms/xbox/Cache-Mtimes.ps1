@@ -52,12 +52,12 @@ foreach ($p in @(
     'extern/borealis/src/file_select/file_select.cpp', # own UWP file picker
     'extern/borealis/src/data.cpp',          # no open/change data folder on UWP
     'src/m_Do/m_Do_main.cpp',                # graphics probe hook
-    'src/d/d_com_inf_game.cpp',              # title-scene override (Apply-Patches-Title.ps1)
+    'src/d/d_com_inf_game.cpp',              # was patched by the title-scene override (Apply-Patches-Title.ps1, removed)
     'src/d/d_s_play.cpp',                    # same
     'src/d/actor/d_a_title.cpp',             # same
-    'src/d/d_camera.cpp',                    # same (cinematic title camera)
-    'src/d/d_stage.cpp',                     # same (spawn point fallback)
-    'src/d/d_event.cpp',                     # same (no events while the title scene is up)
+    'src/d/d_camera.cpp',                    # same
+    'src/d/d_stage.cpp',                     # same
+    'src/d/d_event.cpp',                     # same
     'src/dusk/ui/preset.cpp',                # Dusk preset on UWP (Apply-Patches-Perf.ps1)
     'src/m_Do/m_Do_graphic.cpp'              # DoF / bloom counters (Apply-Patches-Perf.ps1)
 )) { [void]$alwaysFresh.Add($p) }
