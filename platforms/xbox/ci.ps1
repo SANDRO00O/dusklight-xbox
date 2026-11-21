@@ -182,6 +182,13 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
+# --- Performance: Dusk bloom / depth of field off by default on Xbox + perf-diag.log (frame drops that depend on the view) ---
+./platforms/xbox/Apply-Patches-Perf.ps1 2>&1 | Tee-Object -FilePath patches.log -Append
+if ($LASTEXITCODE -ne 0) {
+    Write-Host '################ PERF PATCHING FAILED: an anchor in the game sources did not match (see patches.log) ################'
+    exit 1
+}
+
 # --- Symbol table placeholder + stale linker map ---
 # xbox-project.cmake packages <build>/dusklight.sym as symbols/dusklight.sym (function names for the stack
 # traces in crash-diag.log). It always starts as a placeholder so a table of an older build can never be
