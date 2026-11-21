@@ -2,7 +2,7 @@
 .SYNOPSIS
   Title-screen scene: the Sacred Grove at night with a slow cinematic camera, the player hidden and a new
   logo reveal. Called by Apply-Patches-Disc.ps1. Patches src/d/d_com_inf_game.cpp, src/d/d_camera.cpp,
-  src/d/d_stage.cpp and src/d/actor/d_a_title.cpp.
+  src/d/d_stage.cpp, src/d/d_event.cpp and src/d/actor/d_a_title.cpp.
 
   WHAT the player sees after the disc is loaded (instead of the Bridge of Eldin demo):
     * the Sacred Grove (stage F_SP117, room 1, spawn point 100) at midnight (the time of day is pinned
@@ -24,6 +24,9 @@
       intro when no stb demo drives it, and switches everything off again when the title actor is deleted.
     * d_stage.cpp: if the spawn point is not found in the chosen layer, the title falls back to the first
       spawn point of the stage instead of the fatal "Failed to find player start point" (which would abort).
+    * d_event.cpp: dEvt_control_c::entry() drops every event request while the title scene is up. Without it
+      the Sacred Grove's own cutscene (Midna message cut) crashed the game 9 s after the title appeared,
+      because the message object only exists in a real game (crash-diag: dMsgObject_c::endFlowGroupLocal).
 
   CAMERA EDITOR (in the game, on the title screen): press Y to enter / leave edit mode. Left stick moves,
   right stick looks, LT / RT go down / up, D-pad up / down change the field of view, hold A for fast, X resets
@@ -344,6 +347,21 @@ $stageFallback = @'
                 // If the requested spawn point isn't found, print all valid points within the log
 '@
 
+$eventGate = @'
+int dEvt_control_c::entry() {
+    // dusk_xbox_title: no events (stage cutscenes, message tags) while the title scene is up. The Sacred Grove
+    // starts a Midna cutscene whose message cut needs the message object, which only exists in a real game:
+    // crash at dMsgObject_c::endFlowGroupLocal (null this). The requests are dropped like entry() drops them.
+    {
+        extern bool g_duskTitleActive;
+        if (g_duskTitleActive) {
+            mNum = 0;
+            return 0;
+        }
+    }
+    if (mNum != 0) {
+'@
+
 $waitInit = @'
 void daTitle_c::logoDispWaitInit() {
     g_duskTitleWaitFrames = 0;   // dusk_xbox_title
@@ -412,6 +430,12 @@ $targets = @(
         Edits = @(
             @{ Pattern = '(?m)^(#include "m_Do/m_Do_Reset\.h")(?=\r?$)'; Replacement = $externStage.TrimEnd(); Expected = 1 },
             @{ Pattern = '(?m)^            \} else \{\r?\n                // If the requested spawn point isn''t found, print all valid points within the log[ \t]*(?=\r?$)'; Replacement = $stageFallback.TrimEnd(); Expected = 1 }
+        )
+    },
+    @{
+        Rel = 'src/d/d_event.cpp'
+        Edits = @(
+            @{ Pattern = '(?m)^int dEvt_control_c::entry\(\) \{\r?\n    if \(mNum != 0\) \{(?=\r?$)'; Replacement = $eventGate.TrimEnd(); Expected = 1 }
         )
     },
     @{
