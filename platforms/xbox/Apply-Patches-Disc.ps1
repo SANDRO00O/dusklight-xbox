@@ -160,5 +160,9 @@ if ($LASTEXITCODE -ne 0) { $script:failed = $true }
 & (Join-Path $PSScriptRoot 'Apply-Patches-Title.ps1') -RepoRoot $RepoRoot
 if ($LASTEXITCODE -ne 0) { $script:failed = $true }
 
+# --- mod install: weakly_canonical / fs::relative fail with "Access denied" in the Xbox sandbox (loader.cpp, bundle_disk.cpp) ---
+& (Join-Path $PSScriptRoot 'Apply-Patches-ModInstall.ps1') -RepoRoot $RepoRoot
+if ($LASTEXITCODE -ne 0) { $script:failed = $true }
+
 if ($script:failed) { exit 1 }
 exit 0
