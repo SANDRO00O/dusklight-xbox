@@ -57,6 +57,7 @@ foreach ($p in @(
     'src/d/actor/d_a_title.cpp',             # same
     'src/d/d_camera.cpp',                    # same (cinematic title camera)
     'src/d/d_stage.cpp',                     # same (spawn point fallback)
+    'src/d/d_event.cpp',                     # same (no events while the title scene is up)
     'src/dusk/ui/preset.cpp',                # Dusk preset on UWP (Apply-Patches-Perf.ps1)
     'src/m_Do/m_Do_graphic.cpp'              # DoF / bloom counters (Apply-Patches-Perf.ps1)
 )) { [void]$alwaysFresh.Add($p) }
