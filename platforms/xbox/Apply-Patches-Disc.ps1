@@ -168,5 +168,9 @@ if ($LASTEXITCODE -ne 0) { $script:failed = $true }
 & (Join-Path $PSScriptRoot 'Apply-Patches-NativeDiag.ps1') -RepoRoot $RepoRoot
 if ($LASTEXITCODE -ne 0) { $script:failed = $true }
 
+# --- native mods: export wgpu* from the exe with a static Dawn (mod.dll imports them, error 127; cmake/WindowsExports.cmake) ---
+& (Join-Path $PSScriptRoot 'Apply-Patches-ModExports.ps1') -RepoRoot $RepoRoot
+if ($LASTEXITCODE -ne 0) { $script:failed = $true }
+
 if ($script:failed) { exit 1 }
 exit 0
