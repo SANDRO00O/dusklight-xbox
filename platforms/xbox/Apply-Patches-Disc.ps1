@@ -172,5 +172,9 @@ if ($LASTEXITCODE -ne 0) { $script:failed = $true }
 & (Join-Path $PSScriptRoot 'Apply-Patches-ModExports.ps1') -RepoRoot $RepoRoot
 if ($LASTEXITCODE -ne 0) { $script:failed = $true }
 
+# --- native mods: [trace] log lines before each loader step, to find where a crashing launch dies (loader.cpp, natives.cpp) ---
+& (Join-Path $PSScriptRoot 'Apply-Patches-ModTrace.ps1') -RepoRoot $RepoRoot
+if ($LASTEXITCODE -ne 0) { $script:failed = $true }
+
 if ($script:failed) { exit 1 }
 exit 0
