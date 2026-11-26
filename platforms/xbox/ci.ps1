@@ -354,6 +354,37 @@ try {
     $modsLog = Join-Path $assetsDir 'mods-build.log'
     $lines = @()
     $lines += "FORCE_MODS_OFF=$($env:DUSK_XBOX_FORCE_MODS_OFF)"
+    # The post-link step (symgen manifest --embed) patches the descriptor in section .symdbh (rva 0 = nothing embedded).
+    function Get-SymdbInfo([string]$Path) {
+        try {
+            $b = [System.IO.File]::ReadAllBytes($Path)
+            $pe = [BitConverter]::ToInt32($b, 0x3C)
+            $nsec = [BitConverter]::ToUInt16($b, $pe + 6)
+            $optSize = [BitConverter]::ToUInt16($b, $pe + 20)
+            $sec = $pe + 24 + $optSize
+            $names = @()
+            for ($k = 0; $k -lt $nsec; $k++) {
+                $o = $sec + 40 * $k
+                $name = [System.Text.Encoding]::ASCII.GetString($b, $o, 8).TrimEnd([char]0)
+                $names += $name
+                if ($name -eq '.symdbh') {
+                    $raw = [BitConverter]::ToUInt32($b, $o + 20)
+                    $magic = [BitConverter]::ToUInt64($b, $raw)
+                    $rva = [BitConverter]::ToUInt64($b, $raw + 8)
+                    $size = [BitConverter]::ToUInt64($b, $raw + 16)
+                    return ('.symdbh magic=0x{0:X} rva=0x{1:X} size={2:N0}; sections so far: {3}' -f $magic, $rva, $size, ($names -join ' '))
+                }
+            }
+            return ('NO .symdbh section; sections: ' + ($names -join ' '))
+        } catch { return "unreadable: $_" }
+    }
+    foreach ($logName in 'build.log', 'build-symbols.log') {
+        if (Test-Path $logName) {
+            $hits = @(Select-String -Path $logName -Pattern 'Embedding symbol manifest|symgen' | ForEach-Object { $_.Line.Trim() })
+            $lines += ("{0}: {1} line(s) mentioning symgen / Embedding symbol manifest" -f $logName, $hits.Count)
+            $hits | Select-Object -First 8 | ForEach-Object { $lines += ('    ' + $_) }
+        }
+    }
     $cache = Join-Path $buildDir 'CMakeCache.txt'
     if (Test-Path $cache) { $lines += (Select-String -Path $cache -Pattern '^(DUSK_ENABLE_CODE_MODS|DUSK_HAS_FUNCHOOK):' | ForEach-Object { $_.Line }) }
     foreach ($def in (Get-ChildItem -Path $buildDir -Recurse -Filter 'dusklight_exports.def' -ErrorAction SilentlyContinue)) {
@@ -363,13 +394,19 @@ try {
     foreach ($lib in (Get-ChildItem -Path $buildDir -Recurse -Filter 'dusklight_imports.lib' -ErrorAction SilentlyContinue)) {
         $lines += ("import library: {0} ({1:N0} bytes)" -f $lib.FullName, $lib.Length)
     }
-    if (Test-Path $exe) { $lines += ("built exe: {0:N0} bytes" -f (Get-Item $exe).Length) }
+    if (Test-Path $exe) { $lines += ("built exe: {0:N0} bytes" -f (Get-Item $exe).Length); $lines += ("built exe: " + (Get-SymdbInfo $exe)) }
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     Get-ChildItem -Path (Join-Path $buildDir 'AppPackages') -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in '.msix', '.appx' } | ForEach-Object {
         $zip = [System.IO.Compression.ZipFile]::OpenRead($_.FullName)
         try {
             $e = $zip.Entries | Where-Object { $_.FullName -ieq 'dusklight.exe' } | Select-Object -First 1
             if ($e) { $lines += ("{0}: dusklight.exe in package = {1:N0} bytes" -f $_.Name, $e.Length) }
+            if ($e) {
+                $tmpExe = Join-Path ([System.IO.Path]::GetTempPath()) 'pkg-dusklight.exe'
+                [System.IO.Compression.ZipFileExtensions]::ExtractToFile($e, $tmpExe, $true)
+                $lines += ("{0}: packaged exe: {1}" -f $_.Name, (Get-SymdbInfo $tmpExe))
+                Remove-Item -Force $tmpExe -ErrorAction SilentlyContinue
+            }
             foreach ($d in 'vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll') {
                 $has = [bool]($zip.Entries | Where-Object { $_.FullName -ieq $d })
                 $lines += ("{0}: {1} in package: {2}" -f $_.Name, $d, $has)
