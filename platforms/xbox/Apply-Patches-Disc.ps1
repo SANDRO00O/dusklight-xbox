@@ -172,8 +172,12 @@ if ($LASTEXITCODE -ne 0) { $script:failed = $true }
 & (Join-Path $PSScriptRoot 'Apply-Patches-ModExports.ps1') -RepoRoot $RepoRoot
 if ($LASTEXITCODE -ne 0) { $script:failed = $true }
 
-# --- native mods: [trace] log lines before each loader step, to find where a crashing launch dies (loader.cpp, natives.cpp) ---
+# --- native mods: [trace +ms] log lines before each loader step + [diag] for failed funchook targets (loader.cpp, natives.cpp, hook.cpp) ---
 & (Join-Path $PSScriptRoot 'Apply-Patches-ModTrace.ps1') -RepoRoot $RepoRoot
+if ($LASTEXITCODE -ne 0) { $script:failed = $true }
+
+# --- frame stage timers in aurora_end_frame, logged only while the main thread is slow (aurora.cpp) ---
+& (Join-Path $PSScriptRoot 'Apply-Patches-FrameTimers.ps1') -RepoRoot $RepoRoot
 if ($LASTEXITCODE -ne 0) { $script:failed = $true }
 
 if ($script:failed) { exit 1 }

@@ -78,6 +78,56 @@ function Show-Failure([string]$Stage, [string]$LogFile, [int]$ExitCode) {
     Write-Host '################ end of failure details ################'
 }
 
+# The post-link step (symgen manifest --embed, cmake/SymbolManifest.cmake) patches the descriptor in the PE
+# section .symdbh: rva 0 = nothing embedded (the game then logs "no symbol manifest embedded" and no native mod
+# can hook a function by name).
+function Get-Symdb([string]$Path) {
+    $r = [pscustomobject]@{ Found = $false; Rva = [uint64]0; Size = [uint64]0; Text = '' }
+    try {
+        $b = [System.IO.File]::ReadAllBytes($Path)
+        $pe = [BitConverter]::ToInt32($b, 0x3C)
+        $nsec = [BitConverter]::ToUInt16($b, $pe + 6)
+        $optSize = [BitConverter]::ToUInt16($b, $pe + 20)
+        $sec = $pe + 24 + $optSize
+        $names = @()
+        for ($k = 0; $k -lt $nsec; $k++) {
+            $o = $sec + 40 * $k
+            $name = [System.Text.Encoding]::ASCII.GetString($b, $o, 8).TrimEnd([char]0)
+            $names += $name
+            if ($name -eq '.symdbh') {
+                $raw = [BitConverter]::ToUInt32($b, $o + 20)
+                $r.Found = $true
+                $magic = [BitConverter]::ToUInt64($b, $raw)
+                $r.Rva = [BitConverter]::ToUInt64($b, $raw + 8)
+                $r.Size = [BitConverter]::ToUInt64($b, $raw + 16)
+                $r.Text = ('.symdbh magic=0x{0:X} rva=0x{1:X} size={2:N0}; sections so far: {3}' -f $magic, $r.Rva, $r.Size, ($names -join ' '))
+                return $r
+            }
+        }
+        $r.Text = 'NO .symdbh section; sections: ' + ($names -join ' ')
+    } catch { $r.Text = "unreadable: $_" }
+    return $r
+}
+
+# Throw the package away and let the build produce it again (the layout copies dusklight.exe again when it is newer).
+function Invoke-Repackage([string]$LogName) {
+    $pkgDir = Join-Path $buildDir 'AppPackages'
+    $pkgBak = Join-Path $buildDir 'AppPackages.bak'
+    if (-not (Test-Path $pkgDir)) { return $false }
+    Remove-Item -Recurse -Force $pkgBak -ErrorAction SilentlyContinue
+    Move-Item -Path $pkgDir -Destination $pkgBak
+    cmake --build $buildDir --config $config --target dusklight 2>&1 | Tee-Object -FilePath $LogName | Out-Null
+    $rc = $LASTEXITCODE
+    if (($rc -ne 0) -or (-not (Test-Path $pkgDir))) {
+        Write-Host "::warning::repackaging ($LogName) failed (exit code $rc), keeping the previous package"
+        Remove-Item -Recurse -Force $pkgDir -ErrorAction SilentlyContinue
+        Move-Item -Path $pkgBak -Destination $pkgDir
+        return $false
+    }
+    Remove-Item -Recurse -Force $pkgBak -ErrorAction SilentlyContinue
+    return $true
+}
+
 # --- Diagnostics: what does this runner actually have? ---
 Write-Host '::group::Tool versions'
 cmake --version
@@ -235,6 +285,13 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
+# --- funchook (native mods): hook functions that start with a short jump or end inside the patched bytes ---
+# Not fatal: without it the affected hooks fail (logged "funchook failed ... prepare=5/7") and everything else works.
+./platforms/xbox/Apply-Patches-Funchook.ps1 -BuildDir $buildDir 2>&1 | Tee-Object -FilePath patches.log -Append
+if ($LASTEXITCODE -ne 0) {
+    Write-Host '::warning::funchook patch (Apply-Patches-Funchook.ps1) failed, hooks that need it will fail on the console'
+}
+
 # --- Patch the AppX manifest CMake generated (capabilities for reading the disc image from USB) ---
 # Not fatal if it fails (the build still works, only USB access would be missing), but loud.
 $manifestOk = $true
@@ -259,6 +316,59 @@ if ($buildExit -ne 0) {
 }
 Write-Host 'Build succeeded'
 'post' | Out-File -FilePath 'ci-stage.txt' -Encoding ascii
+
+# --- Native mods: is the symbol manifest really inside the exe? ---
+# FOUND ON HARDWARE: "no symbol manifest embedded", so ~400 by-name hooks of Twilit Essentials / Deferred Fog did
+# not resolve. The POST_BUILD step of CMake should have embedded it. When the built exe still has an empty
+# descriptor, run symgen here (output in Assets/symgen-embed.log) and rebuild the package from that exe.
+$manifestStatus = 'not checked'
+try {
+    $exeBuilt = Join-Path $buildDir "$config/dusklight.exe"
+    $cacheTxt = Join-Path $buildDir 'CMakeCache.txt'
+    if (Test-Path $exeBuilt) {
+        $sd = Get-Symdb $exeBuilt
+        Write-Host ("symbol manifest in the built exe: " + $sd.Text)
+        $manifestStatus = 'embedded by the build (rva=0x{0:X})' -f $sd.Rva
+        if ($sd.Found -and $sd.Rva -eq 0) {
+            $symgenHit = if (Test-Path $cacheTxt) { Select-String -Path $cacheTxt -Pattern '^SYMGEN_EXE:[A-Z]+=(.+)$' | Select-Object -First 1 } else { $null }
+            $pdbFile = Get-ChildItem -Path (Join-Path $buildDir $config) -Filter 'dusklight.pdb' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+            $embedAssets = Join-Path $buildDir 'Assets'
+            New-Item -ItemType Directory -Force -Path $embedAssets | Out-Null
+            $embedLog = Join-Path $embedAssets 'symgen-embed.log'
+            if ($symgenHit -and (Test-Path -LiteralPath $symgenHit.Matches[0].Groups[1].Value) -and $pdbFile) {
+                $symgenExe = $symgenHit.Matches[0].Groups[1].Value
+                Write-Host "::warning::the built exe has an EMPTY symbol manifest, running symgen manually ($symgenExe)"
+                $out = & $symgenExe manifest --pdb $pdbFile.FullName --embed $exeBuilt 2>&1
+                $symgenRc = $LASTEXITCODE
+                (@("symgen exit code: $symgenRc", "pdb: $($pdbFile.FullName)") + @($out | ForEach-Object { "$_" })) | Out-File -FilePath $embedLog -Encoding utf8
+                $sd2 = Get-Symdb $exeBuilt
+                Write-Host ("symbol manifest after the manual embed (symgen exit code {0}): {1}" -f $symgenRc, $sd2.Text)
+                if ($sd2.Rva -ne 0) {
+                    $manifestStatus = 'EMBEDDED MANUALLY by ci.ps1 (the CMake post-build step had not): ' + $sd2.Text
+                    if (Invoke-Repackage 'build-manifest.log') {
+                        Write-Host 'package rebuilt from the exe with the symbol manifest'
+                    } else {
+                        $manifestStatus += ' -- but repackaging failed, the package still has the old exe'
+                    }
+                } else {
+                    $manifestStatus = "symgen ran (exit code $symgenRc) but the descriptor is still empty, see symgen-embed.log"
+                }
+            } else {
+                $manifestStatus = 'built exe has an empty symbol manifest and symgen or the pdb was not found (SYMGEN_EXE: {0}, pdb: {1})' -f ($(if ($symgenHit) { $symgenHit.Matches[0].Groups[1].Value } else { 'unset' })), ($(if ($pdbFile) { $pdbFile.FullName } else { 'missing' }))
+                Write-Host "::warning::$manifestStatus"
+                $manifestStatus | Out-File -FilePath $embedLog -Encoding utf8
+            }
+        } elseif (-not $sd.Found) {
+            $manifestStatus = 'no .symdbh section in the built exe (descriptor optimised away?)'
+            Write-Host "::warning::$manifestStatus"
+        }
+    } else {
+        $manifestStatus = 'no built exe, nothing to check'
+    }
+} catch {
+    $manifestStatus = "check failed: $_"
+    Write-Host "::warning::symbol manifest check failed: $_"
+}
 
 # --- Symbol table for crash / hang stack traces, then repackage ---
 # Everything in this block is best effort: when it fails the first package (placeholder symbol table) stays.
@@ -354,30 +464,7 @@ try {
     $modsLog = Join-Path $assetsDir 'mods-build.log'
     $lines = @()
     $lines += "FORCE_MODS_OFF=$($env:DUSK_XBOX_FORCE_MODS_OFF)"
-    # The post-link step (symgen manifest --embed) patches the descriptor in section .symdbh (rva 0 = nothing embedded).
-    function Get-SymdbInfo([string]$Path) {
-        try {
-            $b = [System.IO.File]::ReadAllBytes($Path)
-            $pe = [BitConverter]::ToInt32($b, 0x3C)
-            $nsec = [BitConverter]::ToUInt16($b, $pe + 6)
-            $optSize = [BitConverter]::ToUInt16($b, $pe + 20)
-            $sec = $pe + 24 + $optSize
-            $names = @()
-            for ($k = 0; $k -lt $nsec; $k++) {
-                $o = $sec + 40 * $k
-                $name = [System.Text.Encoding]::ASCII.GetString($b, $o, 8).TrimEnd([char]0)
-                $names += $name
-                if ($name -eq '.symdbh') {
-                    $raw = [BitConverter]::ToUInt32($b, $o + 20)
-                    $magic = [BitConverter]::ToUInt64($b, $raw)
-                    $rva = [BitConverter]::ToUInt64($b, $raw + 8)
-                    $size = [BitConverter]::ToUInt64($b, $raw + 16)
-                    return ('.symdbh magic=0x{0:X} rva=0x{1:X} size={2:N0}; sections so far: {3}' -f $magic, $rva, $size, ($names -join ' '))
-                }
-            }
-            return ('NO .symdbh section; sections: ' + ($names -join ' '))
-        } catch { return "unreadable: $_" }
-    }
+    $lines += "symbol manifest: $manifestStatus"
     foreach ($logName in 'build.log', 'build-symbols.log') {
         if (Test-Path $logName) {
             $hits = @(Select-String -Path $logName -Pattern 'Embedding symbol manifest|symgen' | ForEach-Object { $_.Line.Trim() })
@@ -394,7 +481,7 @@ try {
     foreach ($lib in (Get-ChildItem -Path $buildDir -Recurse -Filter 'dusklight_imports.lib' -ErrorAction SilentlyContinue)) {
         $lines += ("import library: {0} ({1:N0} bytes)" -f $lib.FullName, $lib.Length)
     }
-    if (Test-Path $exe) { $lines += ("built exe: {0:N0} bytes" -f (Get-Item $exe).Length); $lines += ("built exe: " + (Get-SymdbInfo $exe)) }
+    if (Test-Path $exe) { $lines += ("built exe: {0:N0} bytes" -f (Get-Item $exe).Length); $lines += ("built exe: " + (Get-Symdb $exe).Text) }
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     Get-ChildItem -Path (Join-Path $buildDir 'AppPackages') -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in '.msix', '.appx' } | ForEach-Object {
         $zip = [System.IO.Compression.ZipFile]::OpenRead($_.FullName)
@@ -404,7 +491,7 @@ try {
             if ($e) {
                 $tmpExe = Join-Path ([System.IO.Path]::GetTempPath()) 'pkg-dusklight.exe'
                 [System.IO.Compression.ZipFileExtensions]::ExtractToFile($e, $tmpExe, $true)
-                $lines += ("{0}: packaged exe: {1}" -f $_.Name, (Get-SymdbInfo $tmpExe))
+                $lines += ("{0}: packaged exe: {1}" -f $_.Name, (Get-Symdb $tmpExe).Text)
                 Remove-Item -Force $tmpExe -ErrorAction SilentlyContinue
             }
             foreach ($d in 'vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll') {
