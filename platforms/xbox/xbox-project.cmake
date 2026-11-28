@@ -123,6 +123,21 @@ function(_dusk_xbox_package_resources)
     VS_DEPLOYMENT_CONTENT 1
     VS_DEPLOYMENT_LOCATION "symbols")
   message(STATUS "xbox: ${_sym} marked as package content (symbols/)")
+
+  # Symbol manifest for native mods (by-name hooks). The AppX package is built BEFORE the post-build step that
+  # embeds the manifest into dusklight.exe (build.log of 2026-11-28), so the packaged exe has none. ci.ps1 copies
+  # the blob out of the built exe into this file and builds again; manifest.cpp (Apply-Patches-Manifest.ps1)
+  # reads it when the exe has no embedded manifest. Placeholder text (shorter than a header) is ignored.
+  set(_symdb "${CMAKE_BINARY_DIR}/dusklight.symdb")
+  if(NOT EXISTS "${_symdb}")
+    file(WRITE "${_symdb}" "no symbol manifest in this build\n")
+  endif()
+  target_sources(dusklight PRIVATE "${_symdb}")
+  set_source_files_properties("${_symdb}" PROPERTIES
+    GENERATED TRUE
+    VS_DEPLOYMENT_CONTENT 1
+    VS_DEPLOYMENT_LOCATION "symbols")
+  message(STATUS "xbox: ${_symdb} marked as package content (symbols/)")
 endfunction()
 
 # --- Branded tile/logo/splash images in the MSIX package -----------------------------------------

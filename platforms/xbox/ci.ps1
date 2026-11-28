@@ -128,6 +128,37 @@ function Invoke-Repackage([string]$LogName) {
     return $true
 }
 
+# Copy the manifest blob (the bytes the .symdbh descriptor points at) out of an exe that symgen embedded it into.
+# Returns $true when $Out holds a blob that starts with the symgen magic.
+function Export-Symdb([string]$Exe, [string]$Out) {
+    $d = Get-Symdb $Exe
+    if ((-not $d.Found) -or $d.Rva -eq 0 -or $d.Size -eq 0) { return $false }
+    $b = [System.IO.File]::ReadAllBytes($Exe)
+    $pe = [BitConverter]::ToInt32($b, 0x3C)
+    $nsec = [BitConverter]::ToUInt16($b, $pe + 6)
+    $optSize = [BitConverter]::ToUInt16($b, $pe + 20)
+    $sec = $pe + 24 + $optSize
+    for ($k = 0; $k -lt $nsec; $k++) {
+        $o = $sec + 40 * $k
+        $vsize = [uint64][BitConverter]::ToUInt32($b, $o + 8)
+        $va = [uint64][BitConverter]::ToUInt32($b, $o + 12)
+        $rawSize = [uint64][BitConverter]::ToUInt32($b, $o + 16)
+        $raw = [int64][BitConverter]::ToUInt32($b, $o + 20)
+        $len = if ($vsize -gt $rawSize) { $vsize } else { $rawSize }
+        if ($d.Rva -ge $va -and $d.Rva -lt ($va + $len)) {
+            $off = $raw + [int64]($d.Rva - $va)
+            $size = [int64]$d.Size
+            if (($off + $size) -gt $b.Length) { return $false }
+            $blob = [byte[]]::new([int]$size)
+            [Array]::Copy($b, $off, $blob, [int64]0, $size)
+            if ([System.Text.Encoding]::ASCII.GetString($blob, 0, 6) -ne 'SYMGEN') { return $false }
+            [System.IO.File]::WriteAllBytes($Out, $blob)
+            return $true
+        }
+    }
+    return $false
+}
+
 # --- Diagnostics: what does this runner actually have? ---
 Write-Host '::group::Tool versions'
 cmake --version
@@ -249,6 +280,9 @@ $symFile = Join-Path $buildDir 'dusklight.sym'
 $mapFile = Join-Path $buildDir 'dusklight.map'
 'no symbols in this build' | Out-File -FilePath $symFile -Encoding ascii
 Remove-Item -Force $mapFile -ErrorAction SilentlyContinue
+# Same for the symbol manifest blob (symbols/dusklight.symdb, see "Symbol manifest for native mods" below).
+$symdbFile = Join-Path $buildDir 'dusklight.symdb'
+'no symbol manifest in this build' | Out-File -FilePath $symdbFile -Encoding ascii
 
 # --- Configure ---
 # Pin the Visual Studio instance, generator, MSVC toolset and SDK. CMake otherwise may choose a
@@ -370,6 +404,28 @@ try {
     Write-Host "::warning::symbol manifest check failed: $_"
 }
 
+# --- Symbol manifest for native mods: ship the blob as symbols/dusklight.symdb ---
+# FOUND ON HARDWARE (mods-build.log of 2026-11-28): the built exe has the manifest (rva=0x26A8000, 46.4 MB) but the exe
+# inside the .msix has none (rva=0, 39.2 MB): MSBuild's AppxPackage step runs BEFORE the post-build step that embeds it.
+# The blob is copied into <build>/dusklight.symdb (a deployment-content file, like dusklight.sym) and the package is
+# built again below; the game reads it when the exe has no embedded manifest (Apply-Patches-Manifest.ps1).
+$symdbReady = $false
+$didRepack = $false
+try {
+    $exeForSymdb = Join-Path $buildDir "$config/dusklight.exe"
+    if ((Test-Path $exeForSymdb) -and (Export-Symdb $exeForSymdb $symdbFile)) {
+        $symdbReady = $true
+        $sdb = Get-Item $symdbFile
+        Write-Host ('symbol manifest blob for the package: {0:N0} bytes -> {1}' -f $sdb.Length, $symdbFile)
+        $manifestStatus += (' | shipped as symbols/dusklight.symdb ({0:N0} bytes)' -f $sdb.Length)
+    } else {
+        Write-Host '::warning::could not copy the symbol manifest blob out of the built exe, the package has no manifest'
+        $manifestStatus += ' | NOT shipped as symbols/dusklight.symdb (blob not found in the built exe)'
+    }
+} catch {
+    Write-Host "::warning::symbol manifest blob export failed: $_"
+}
+
 # --- Symbol table for crash / hang stack traces, then repackage ---
 # Everything in this block is best effort: when it fails the first package (placeholder symbol table) stays.
 try {
@@ -379,7 +435,7 @@ try {
         Write-Host ('symbol table: {0:N0} bytes' -f $symSize)
         $pkgDir = Join-Path $buildDir 'AppPackages'
         $pkgBak = Join-Path $buildDir 'AppPackages.nosyms'
-        if (($symSize -gt 4096) -and (Test-Path $pkgDir)) {
+        if ((($symSize -gt 4096) -or $symdbReady) -and (Test-Path $pkgDir)) {
             Remove-Item -Recurse -Force $pkgBak -ErrorAction SilentlyContinue
             Move-Item -Path $pkgDir -Destination $pkgBak
             $sw.Restart()
@@ -392,6 +448,7 @@ try {
                 Move-Item -Path $pkgBak -Destination $pkgDir
             } else {
                 Remove-Item -Recurse -Force $pkgBak -ErrorAction SilentlyContinue
+                $didRepack = $true
                 # Is the table really inside the package?
                 Add-Type -AssemblyName System.IO.Compression.FileSystem
                 Get-ChildItem -Path $pkgDir -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in '.msix', '.appx' } | ForEach-Object {
@@ -403,6 +460,13 @@ try {
                             if ($entry.Length -lt 4096) { Write-Host "::warning::$($_.Name) still has the placeholder symbol table" }
                         } else {
                             Write-Host "::warning::$($_.Name) does not contain symbols/dusklight.sym"
+                        }
+                        $entryDb = $zip.Entries | Where-Object { $_.FullName -match 'symbols[/\\]dusklight\.symdb$' } | Select-Object -First 1
+                        if ($entryDb) {
+                            Write-Host ('{0}: symbols/dusklight.symdb = {1:N0} bytes' -f $_.Name, $entryDb.Length)
+                            if ($symdbReady -and $entryDb.Length -lt 4096) { Write-Host "::warning::$($_.Name) still has the placeholder symbol manifest" }
+                        } else {
+                            Write-Host "::warning::$($_.Name) does not contain symbols/dusklight.symdb"
                         }
                     } finally {
                         $zip.Dispose()
@@ -419,6 +483,16 @@ try {
     }
 } catch {
     Write-Host "::warning::symbol table step failed: $_"
+}
+
+# The block above repackages only when the linker map exists. If it did not run but the manifest blob is ready, do it here.
+if ($symdbReady -and (-not $didRepack)) {
+    if (Invoke-Repackage 'build-symdb.log') {
+        $didRepack = $true
+        Write-Host 'package rebuilt with symbols/dusklight.symdb'
+    } else {
+        $manifestStatus += ' | repackaging for symbols/dusklight.symdb FAILED'
+    }
 }
 
 # Record the commits this build corresponds to (only after a successful build, see Cache-Mtimes.ps1).
@@ -494,6 +568,8 @@ try {
                 $lines += ("{0}: packaged exe: {1}" -f $_.Name, (Get-Symdb $tmpExe).Text)
                 Remove-Item -Force $tmpExe -ErrorAction SilentlyContinue
             }
+            $eDb = $zip.Entries | Where-Object { $_.FullName -match 'symbols[/\\]dusklight\.symdb$' } | Select-Object -First 1
+            $lines += ("{0}: symbols/dusklight.symdb in package = {1}" -f $_.Name, $(if ($eDb) { ('{0:N0} bytes' -f $eDb.Length) } else { 'MISSING' }))
             foreach ($d in 'vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll') {
                 $has = [bool]($zip.Entries | Where-Object { $_.FullName -ieq $d })
                 $lines += ("{0}: {1} in package: {2}" -f $_.Name, $d, $has)
