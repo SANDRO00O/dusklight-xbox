@@ -64,7 +64,9 @@ foreach ($p in @(
     'src/dusk/mods/loader/bundle_disk.cpp',  # fs::relative -> lexically_relative on UWP (Apply-Patches-ModInstall.ps1)
     'src/dusk/mods/loader/native_module.cpp', # import diagnostic when mod.dll fails to load (Apply-Patches-NativeDiag.ps1)
     'src/dusk/mods/loader/natives.cpp',      # [trace] lines while loading native mods (Apply-Patches-ModTrace.ps1)
-    'src/dusk/mods/svc/hook.cpp'             # [diag] line when funchook fails (Apply-Patches-ModTrace.ps1)
+    'src/dusk/mods/svc/hook.cpp',            # [diag] line when funchook fails (Apply-Patches-ModTrace.ps1)
+    'src/dusk/mods/manifest.cpp',            # symbol manifest from symbols/dusklight.symdb (Apply-Patches-Manifest.ps1)
+    'extern/aurora/lib/rmlui.cpp'            # RmlUi stage timers (Apply-Patches-RmlTimers.ps1)
 )) { [void]$alwaysFresh.Add($p) }
 
 # One-off: the first cached build (workflow run 117453502716, commit below) wrote an empty stamp

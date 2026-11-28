@@ -176,6 +176,14 @@ if ($LASTEXITCODE -ne 0) { $script:failed = $true }
 & (Join-Path $PSScriptRoot 'Apply-Patches-ModTrace.ps1') -RepoRoot $RepoRoot
 if ($LASTEXITCODE -ne 0) { $script:failed = $true }
 
+# --- native mods: read the symbol manifest from symbols/dusklight.symdb when the packaged exe has none (manifest.cpp) ---
+& (Join-Path $PSScriptRoot 'Apply-Patches-Manifest.ps1') -RepoRoot $RepoRoot
+if ($LASTEXITCODE -ne 0) { $script:failed = $true }
+
+# --- RmlUi stage timers (Context::Update / Render / EndFrame) in rmlui::record_frame, logged only while slow (rmlui.cpp) ---
+& (Join-Path $PSScriptRoot 'Apply-Patches-RmlTimers.ps1') -RepoRoot $RepoRoot
+if ($LASTEXITCODE -ne 0) { $script:failed = $true }
+
 # --- frame stage timers in aurora_end_frame, logged only while the main thread is slow (aurora.cpp) ---
 & (Join-Path $PSScriptRoot 'Apply-Patches-FrameTimers.ps1') -RepoRoot $RepoRoot
 if ($LASTEXITCODE -ne 0) { $script:failed = $true }
